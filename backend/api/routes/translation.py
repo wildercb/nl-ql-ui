@@ -1,28 +1,32 @@
 """Translation API endpoints."""
 
-from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import structlog
 import json
 import asyncio
 import time
+import logging
+import httpx
 
 from services.translation_service import TranslationService, TranslationResult
 from config import get_settings
+from services.database_service import get_database_service
+from models.translation import TranslationResult
+from .auth import get_current_user
 
-logger = structlog.get_logger()
-router = APIRouter()
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api", tags=["Translation"])
 
 
 class TranslationRequest(BaseModel):
     """Request model for translation."""
-    natural_query: str = Field(..., min_length=1, max_length=1000, description="Natural language query to translate")
-    schema_context: Optional[str] = Field(None, description="GraphQL schema context for better translation")
-    model: Optional[str] = Field(None, description="AI model to use for translation")
-    temperature: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Temperature for AI generation")
-    stream: Optional[bool] = Field(False, description="Enable streaming response with detailed steps")
+    natural_query: str = Field(..., min_length=1, max_length=2000, description="Natural language query to translate")
+    schema_context: Optional[str] = Field(None, max_length=10000, description="GraphQL schema context")
+    model: Optional[str] = Field(None, description="Model to use for translation")
+    session_id: Optional[str] = Field(None, description="Session ID for guest users")
 
 
 class TranslationResponse(BaseModel):
@@ -64,19 +68,31 @@ class BatchTranslationResponse(BaseModel):
     total_processing_time: float
 
 
+class ChatMessage(BaseModel):
+    role: str = Field(..., description="Message role (user, assistant, system)")
+    content: str = Field(..., description="Message content")
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=2000, description="User message")
+    model: Optional[str] = Field("phi3:mini", description="Model to use for chat")
+    history: Optional[List[Dict[str, Any]]] = Field(None, description="Previous messages for context")
+
+
 def get_translation_service() -> TranslationService:
     """Dependency to get translation service."""
     return TranslationService()
 
 
-@router.post("/translate", response_model=TranslationResponse)
+@router.post("/translate")
 async def translate_query(
     request: TranslationRequest,
-    translation_service: TranslationService = Depends(get_translation_service)
+    current_user=Depends(get_current_user),
+    db_service=Depends(get_database_service)
 ):
-    """Translate a natural language query to GraphQL."""
+    """Translate natural language query to GraphQL."""
     try:
-        logger.info("Translation request", query=request.natural_query[:100], model=request.model)
+        translation_service = TranslationService()
         
         result = await translation_service.translate_to_graphql(
             natural_query=request.natural_query,
@@ -84,23 +100,49 @@ async def translate_query(
             model=request.model
         )
         
-        response = TranslationResponse.from_result(result)
+        # Store in database with user/session info
+        from models.query import QueryLog
         
-        logger.info(
-            "Translation completed", 
+        log_entry = QueryLog(
+            natural_query=request.natural_query,
+            graphql_query=result.graphql_query,
             confidence=result.confidence,
             processing_time=result.processing_time,
-            warnings_count=len(result.warnings)
+            model_used=result.model_used,
+            user_id=current_user.id if current_user else None,
+            session_id=request.session_id,
+            metadata={
+                "explanation": result.explanation,
+                "warnings": result.warnings,
+                "suggested_improvements": result.suggested_improvements,
+                "schema_context": request.schema_context
+            }
         )
         
-        return response
+        await log_entry.save()
+        
+        return {
+            "graphql_query": result.graphql_query,
+            "confidence": result.confidence,
+            "explanation": result.explanation,
+            "processing_time": result.processing_time,
+            "model_used": result.model_used,
+            "warnings": result.warnings,
+            "suggested_improvements": result.suggested_improvements,
+            "query_id": str(log_entry.id)
+        }
         
     except ValueError as e:
-        logger.warning("Translation validation error", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
     except Exception as e:
-        logger.error("Translation failed", error=str(e), exc_info=True)
-        raise HTTPException(status_code=500, detail="Translation service error")
+        logger.error(f"Translation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Translation service temporarily unavailable"
+        )
 
 
 @router.post("/translate/stream")
@@ -175,7 +217,7 @@ async def translate_query_stream(
                         'user_prompt': request.natural_query,
                         'parameters': {
                             'model': model,
-                            'temperature': request.temperature,
+                            'temperature': 0.7,
                             'max_tokens': 2048
                         }
                     },
@@ -294,4 +336,114 @@ async def suggest_improvements(
         
     except Exception as e:
         logger.error("Failed to generate improvements", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to generate suggestions") 
+        raise HTTPException(status_code=500, detail="Failed to generate suggestions")
+
+
+@router.post("/chat")
+async def chat_with_model(
+    request: ChatRequest,
+    current_user=Depends(get_current_user)
+):
+    """Continue conversation with an AI model."""
+    try:
+        from services.ollama_service import OllamaService
+        
+        ollama_service = OllamaService()
+        
+        # Build conversation history
+        messages = []
+        
+        # Add system message for GraphQL context
+        messages.append({
+            "role": "system",
+            "content": "You are a helpful AI assistant specializing in GraphQL and data querying. "
+                      "You can help with GraphQL queries, data analysis, and general programming questions. "
+                      "Be concise but thorough in your responses."
+        })
+        
+        # Add previous history if provided
+        if request.history:
+            for msg in request.history[-10:]:  # Last 10 messages
+                if msg.get('sender') == 'user':
+                    messages.append({
+                        "role": "user", 
+                        "content": msg.get('content', '')
+                    })
+                elif msg.get('sender') == 'assistant':
+                    messages.append({
+                        "role": "assistant", 
+                        "content": msg.get('content', '')
+                    })
+        
+        # Add current user message
+        messages.append({
+            "role": "user",
+            "content": request.message
+        })
+        
+        # Get AI response
+        response = await ollama_service.chat_completion(
+            messages=messages,
+            model=request.model,
+            temperature=0.7,
+            max_tokens=1024
+        )
+        
+        # Broadcast the chat interaction
+        try:
+            interaction_data = {
+                'id': f"chat_{int(time.time() * 1000)}",
+                'timestamp': time.time(),
+                'model': request.model,
+                'type': 'chat',
+                'processing_time': 0,  # Could measure this
+                'user_id': str(current_user.id) if current_user else None,
+                'session_id': None,
+                
+                # Prompt details
+                'system_prompt': messages[0]['content'],
+                'user_prompt': request.message,
+                'full_prompt': f"Context: {len(messages)-1} previous messages\nUser: {request.message}",
+                'parameters': {
+                    'temperature': 0.7,
+                    'max_tokens': 1024,
+                    'model': request.model
+                },
+                
+                # Response details
+                'raw_response': response.text,
+                'processed_response': response.text,
+                'confidence': 1.0,  # Chat doesn't have confidence scoring
+                'warnings': [],
+                'response_metadata': {},
+                
+                'status': 'completed',
+                'error': None,
+                'tokens_used': len(request.message.split()) + len(response.text.split()),
+                'response_tokens': len(response.text.split()),
+                'total_tokens': len(request.message.split()) + len(response.text.split())
+            }
+            
+            # Broadcast to live interactions
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    "http://localhost:8000/api/interactions/broadcast",
+                    json=interaction_data,
+                    timeout=5.0
+                )
+                
+        except Exception as e:
+            logger.warning(f"Failed to broadcast chat interaction: {e}")
+        
+        return {
+            "response": response.text,
+            "model": request.model,
+            "timestamp": time.time()
+        }
+        
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Chat service temporarily unavailable"
+        ) 

@@ -12,7 +12,7 @@ const themeStore = useThemeStore()
 
 onMounted(() => {
   // Initialize theme
-  themeStore.initializeTheme()
+  themeStore.loadTheme()
 })
 </script>
 

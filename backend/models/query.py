@@ -240,8 +240,9 @@ class QueryLog(BaseDocument):
     is_successful: bool = Field(False, description="Whether the translation was successful")
     error_message: Optional[str] = Field(None, description="Error message if translation failed")
     
-    # User association
+    # User and session association
     user_id: Optional[ObjectId] = Field(None, description="User who created this query log")
+    session_id: Optional[str] = Field(None, description="Session ID for guest users")
     
     # Timestamp
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the query was logged")
@@ -251,11 +252,56 @@ class QueryLog(BaseDocument):
         indexes = [
             "uuid",
             "user_id",
+            "session_id",
             [("timestamp", -1)],
-            [("user_id", 1), ("timestamp", -1)]
+            [("user_id", 1), ("timestamp", -1)],
+            [("session_id", 1), ("timestamp", -1)]
         ]
 
     def __repr__(self):
         return f"<QueryLog(uuid='{self.uuid}', natural_query='{self.natural_query[:50]}...')>"
+
+    model_config = SettingsConfigDict(arbitrary_types_allowed=True)
+
+
+class ChatMessage(BaseDocument):
+    """Document for storing chat messages in conversations."""
+    
+    # Message identification
+    conversation_id: str = Field(..., description="ID of the conversation this message belongs to")
+    user_id: Optional[ObjectId] = Field(None, description="User who sent the message")
+    
+    # Message content
+    sender: str = Field(..., description="Who sent the message ('user', 'assistant', 'system')")
+    content: str = Field(..., description="The message content")
+    
+    # Message metadata
+    model_used: Optional[str] = Field(None, description="AI model used for assistant responses")
+    processing_time: Optional[float] = Field(None, ge=0.0, description="Time taken to generate response")
+    
+    # Context and relationships
+    parent_message_id: Optional[ObjectId] = Field(None, description="ID of the message this is replying to")
+    related_query_id: Optional[ObjectId] = Field(None, description="Related query if this message is about a specific translation")
+    
+    # Message state
+    is_edited: bool = Field(False, description="Whether this message has been edited")
+    edit_count: int = Field(0, ge=0, description="Number of times this message has been edited")
+    
+    # Timestamp
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="When the message was sent")
+    
+    class Settings:
+        name = "chat_messages"
+        indexes = [
+            "conversation_id",
+            "user_id",
+            "sender",
+            [("conversation_id", 1), ("timestamp", 1)],
+            [("user_id", 1), ("timestamp", -1)],
+            [("timestamp", -1)]
+        ]
+
+    def __repr__(self):
+        return f"<ChatMessage(conversation='{self.conversation_id}', sender='{self.sender}', content='{self.content[:50]}...')>"
 
     model_config = SettingsConfigDict(arbitrary_types_allowed=True)

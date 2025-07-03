@@ -16,7 +16,7 @@ from .middleware import (
     SecurityMiddleware,
     CacheMiddleware
 )
-from .routes import health, translation, validation, models, analytics
+from .routes import health, translation, validation, models, analytics, interactions, history, chat, auth
 
 # Configure logging
 logging.basicConfig(
@@ -99,6 +99,10 @@ app.include_router(translation.router)
 app.include_router(validation.router)
 app.include_router(models.router)
 app.include_router(analytics.router)  # New analytics endpoints
+app.include_router(interactions.router)  # Live interactions streaming
+app.include_router(history.router)  # Query history
+app.include_router(chat.router)  # Chat functionality
+app.include_router(auth.router)  # Authentication endpoints
 
 logger.info(f"📍 API routes registered: {len(app.routes)} endpoints")
 

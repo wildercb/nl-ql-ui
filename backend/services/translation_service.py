@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import httpx
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
@@ -11,6 +12,7 @@ from datetime import datetime
 from services.ollama_service import OllamaService
 from config.settings import get_settings
 from models.translation import TranslationResult
+from config.icl_examples import get_initial_icl_examples
 
 logger = logging.getLogger(__name__)
 
@@ -22,31 +24,93 @@ class TranslationService:
         self.settings = get_settings()
         self.ollama_service = OllamaService()
         
-    def _build_system_prompt(self, schema_context: str = "") -> str:
+    async def _broadcast_interaction(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        raw_response: str,
+        processed_response: str,
+        processing_time: float,
+        confidence: float,
+        warnings: List[str],
+        user_id: Optional[str] = None,
+        session_id: Optional[str] = None
+    ):
+        """Broadcast model interaction to live stream."""
+        try:
+            interaction_data = {
+                'id': f"trans_{int(time.time() * 1000)}",
+                'timestamp': time.time(),
+                'model': model,
+                'type': 'translation',
+                'processing_time': processing_time,
+                'user_id': user_id,
+                'session_id': session_id,
+                
+                # Full prompt details
+                'system_prompt': system_prompt,
+                'user_prompt': user_prompt,
+                'full_prompt': f"System: {system_prompt[:200]}...\n\nUser: {user_prompt}",
+                'parameters': {
+                    'temperature': 0.3,
+                    'max_tokens': 2048,
+                    'model': model
+                },
+                
+                # Response details
+                'raw_response': raw_response,
+                'processed_response': processed_response,
+                'confidence': confidence,
+                'warnings': warnings,
+                'response_metadata': {},
+                
+                'status': 'completed',
+                'error': None,
+                'tokens_used': len(user_prompt.split()) + len(raw_response.split()),
+                'response_tokens': len(raw_response.split()),
+                'total_tokens': len(user_prompt.split()) + len(raw_response.split())
+            }
+            
+            # Send to interactions broadcast endpoint
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"http://localhost:{self.settings.api.port}/api/interactions/broadcast",
+                    json=interaction_data,
+                    timeout=5.0
+                )
+                
+        except Exception as e:
+            logger.warning(f"Failed to broadcast interaction: {e}")
+
+    def _build_system_prompt(self, schema_context: str = "", icl_examples: List[str] = None) -> str:
         """Build system prompt for GraphQL translation."""
-        base_prompt = """You are an expert GraphQL translator. Convert natural language queries to valid GraphQL queries.
+        base_prompt = """You are a GraphQL expert. Translate natural language to GraphQL queries.
 
-Guidelines:
-1. Create correct GraphQL syntax
-2. Select relevant fields based on query intent
-3. Use arguments and variables when needed
-4. Follow camelCase naming for fields
-5. Return only needed data
+Rules:
+1. Use correct GraphQL syntax
+2. Match fields to query intent
+3. Return only necessary data
 
-Respond with a JSON object:
+Respond with JSON:
 {
-  "graphql": "the GraphQL query string",
+  "graphql": "query string",
   "confidence": 0.0-1.0,
-  "explanation": "why this query was generated",
-  "warnings": ["any issues with the translation"],
-  "suggestions": ["ways to improve the query"]
+  "explanation": "reasoning",
+  "warnings": ["issues"],
+  "suggestions": ["improvements"]
 }
 
-Do not add extra text outside the JSON."""
+Only return JSON, no extra text."""
 
         if schema_context:
             base_prompt += f"\n\nSchema Context:\n{schema_context}"
             
+        if icl_examples:
+            base_prompt += "\n\nExamples:\n"
+            for i, example in enumerate(icl_examples, 1):
+                base_prompt += f"{i}. {example}\n"
+        
         return base_prompt
 
     def _extract_json_from_response(self, response: str) -> Dict:
@@ -128,7 +192,8 @@ Do not add extra text outside the JSON."""
         self,
         natural_query: str,
         schema_context: str = "",
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        icl_examples: Optional[List[str]] = None
     ) -> TranslationResult:
         """Translate natural language query to GraphQL."""
         start_time = time.time()
@@ -137,7 +202,9 @@ Do not add extra text outside the JSON."""
             raise ValueError("Natural language query cannot be empty")
         
         model = model or self.settings.ollama.default_model
-        system_prompt = self._build_system_prompt(schema_context)
+        # Use provided ICL examples or default to initial examples
+        selected_icl_examples = icl_examples if icl_examples is not None else get_initial_icl_examples()[:3]  # Limit to 3 examples for brevity
+        system_prompt = self._build_system_prompt(schema_context, selected_icl_examples)
         
         # Build the user prompt
         user_prompt = f"""Convert this natural language query to GraphQL:
@@ -180,6 +247,17 @@ Remember to return only the JSON object with the specified structure."""
             
             processing_time = time.time() - start_time
             
+            await self._broadcast_interaction(
+                model,
+                system_prompt,
+                user_prompt,
+                response.text,
+                json.dumps(result_data),
+                processing_time,
+                confidence,
+                warnings
+            )
+            
             return TranslationResult(
                 graphql_query=graphql_query,
                 confidence=confidence,
@@ -194,6 +272,19 @@ Remember to return only the JSON object with the specified structure."""
         except Exception as e:
             logger.error(f"Translation failed: {e}")
             processing_time = time.time() - start_time
+            
+            await self._broadcast_interaction(
+                model,
+                system_prompt,
+                user_prompt,
+                "",
+                "",
+                processing_time,
+                0.0,
+                [f"Error: {str(e)}"],
+                None,
+                None
+            )
             
             return TranslationResult(
                 graphql_query="",

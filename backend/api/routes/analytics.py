@@ -425,4 +425,91 @@ async def export_session_data(session_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to export session data: {str(e)}") 
+        raise HTTPException(status_code=500, detail=f"Failed to export session data: {str(e)}")
+
+
+@router.get("/prompt-analysis/{session_id}")
+async def get_prompt_analysis(
+    session_id: str,
+    tracking_service = Depends(get_tracking_service)
+):
+    """Get detailed prompt analysis for a specific session."""
+    
+    try:
+        analysis = await tracking_service.get_prompt_analysis(session_id)
+        return analysis
+        
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Prompt analysis not found: {str(e)}")
+
+
+@router.get("/response-analysis/{session_id}")
+async def get_response_analysis(
+    session_id: str,
+    tracking_service = Depends(get_tracking_service)
+):
+    """Get detailed response analysis for a specific session."""
+    
+    try:
+        analysis = await tracking_service.get_response_analysis(session_id)
+        return analysis
+        
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Response analysis not found: {str(e)}")
+
+
+@router.get("/live-interactions/stream")
+async def stream_live_interactions():
+    """Stream live model interactions using Server-Sent Events."""
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    import json
+    import time
+    
+    async def event_stream():
+        while True:
+            try:
+                # Get recent interactions
+                interactions = await get_interactions(limit=10, offset=0)
+                
+                # Simulate real-time data for demo
+                demo_interaction = {
+                    "id": f"demo_{int(time.time())}",
+                    "agent": "GraphQL Translator",
+                    "message": f"Processing query at {time.strftime('%H:%M:%S')}",
+                    "timestamp": time.time() * 1000,
+                    "session_id": "demo_session",
+                    "interaction_type": "translation"
+                }
+                
+                yield f"data: {json.dumps(demo_interaction)}\n\n"
+                await asyncio.sleep(5)  # Send updates every 5 seconds
+                
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                await asyncio.sleep(10)
+    
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream"
+        }
+    )
+
+
+@router.post("/track-interaction")
+async def track_interaction(
+    interaction_data: Dict[str, Any],
+    tracking_service = Depends(get_tracking_service)
+):
+    """Track a new model interaction."""
+    
+    try:
+        interaction = await tracking_service.track_interaction(interaction_data)
+        return {"status": "success", "interaction_id": interaction.id}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to track interaction: {str(e)}") 

@@ -312,4 +312,131 @@ Please provide an improved GraphQL translation that addresses the feedback.
             
         except Exception as e:
             await ctx.error(f"Translation improvement failed: {str(e)}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    async def select_icl_examples(
+        natural_query: str,
+        domain: Optional[str] = None,
+        max_examples: int = 3,
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Select the most relevant in-context learning (ICL) examples for a given natural language query.
+        
+        This tool analyzes the query and domain to pick the best examples from a database or predefined set
+        to enhance the translation prompt.
+        
+        Args:
+            natural_query: The natural language query to analyze for relevant examples
+            domain: Optional domain context (e.g., 'e-commerce', 'social-media') to filter examples
+            max_examples: Maximum number of examples to return (default: 3)
+        
+        Returns:
+            Dictionary with selected ICL examples and metadata
+        """
+        await ctx.info(f"Selecting ICL examples for query: {natural_query[:50]}...")
+        
+        try:
+            from config.icl_examples import INITIAL_ICL_EXAMPLES
+            
+            # Simple relevance scoring based on keyword overlap (to be enhanced with NLP later)
+            selected_examples = []
+            query_lower = natural_query.lower()
+            domain_lower = domain.lower() if domain else ""
+            
+            # Score examples based on matching keywords
+            scored_examples = []
+            for example in INITIAL_ICL_EXAMPLES:
+                natural_text = example['natural'].lower()
+                score = 0
+                if any(word in natural_text for word in query_lower.split() if len(word) > 3):
+                    score += 1
+                if domain_lower and domain_lower in natural_text:
+                    score += 2
+                scored_examples.append((example, score))
+            
+            # Sort by score and take the top max_examples
+            scored_examples.sort(key=lambda x: x[1], reverse=True)
+            selected_examples = [f"Natural: {ex['natural']}\nGraphQL: {ex['graphql']}" for ex, _ in scored_examples[:max_examples] if ex[1] > 0]
+            
+            # If no relevant examples found, use the top initial examples
+            if not selected_examples:
+                selected_examples = [f"Natural: {ex['natural']}\nGraphQL: {ex['graphql']}" for ex in INITIAL_ICL_EXAMPLES[:max_examples]]
+            
+            await ctx.info(f"Selected {len(selected_examples)} relevant ICL examples")
+            
+            return {
+                "selected_examples": selected_examples,
+                "total_available": len(INITIAL_ICL_EXAMPLES),
+                "relevance_criteria": "keyword overlap" if selected_examples else "default selection",
+                "domain_filter": domain if domain else "none"
+            }
+        except Exception as e:
+            await ctx.error(f"Failed to select ICL examples: {str(e)}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    async def translate_with_dynamic_icl(
+        natural_query: str,
+        schema_context: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = 0.3,
+        domain: Optional[str] = None,
+        max_icl_examples: int = 3,
+        ctx: Context = None
+    ) -> Dict[str, Any]:
+        """
+        Translate a natural language query to GraphQL using dynamically selected in-context learning (ICL) examples.
+        
+        This tool first selects the most relevant ICL examples based on the query and domain,
+        then uses them to enhance the translation process.
+        
+        Args:
+            natural_query: The natural language query to translate
+            schema_context: Optional GraphQL schema context for better translation
+            model: AI model to use for translation
+            temperature: Temperature for AI model (0.0-1.0)
+            domain: Optional domain context to filter relevant examples
+            max_icl_examples: Maximum number of ICL examples to include in the prompt
+        
+        Returns:
+            Translation result with GraphQL query and metadata about ICL usage
+        """
+        await ctx.info(f"Starting translation with dynamic ICL for query: {natural_query[:50]}...")
+        
+        try:
+            start_time = time.time()
+            
+            # Step 1: Select relevant ICL examples
+            icl_result = await select_icl_examples(natural_query, domain, max_icl_examples, ctx)
+            selected_examples = icl_result.get("selected_examples", [])
+            
+            # Step 2: Perform translation with selected examples
+            result = await translation_service.translate_to_graphql(
+                natural_query=natural_query,
+                schema_context=schema_context or "",
+                model=model,
+                icl_examples=selected_examples
+            )
+            
+            processing_time = time.time() - start_time
+            await ctx.info(f"Translation with dynamic ICL completed in {processing_time:.2f}s")
+            
+            return {
+                "graphql_query": result.graphql_query,
+                "confidence": result.confidence,
+                "explanation": result.explanation,
+                "model_used": result.model_used,
+                "processing_time": processing_time,
+                "icl_metadata": {
+                    "examples_used": len(selected_examples),
+                    "relevance_criteria": icl_result.get("relevance_criteria", "unknown"),
+                    "domain_filter": domain if domain else "none"
+                },
+                "suggestions": result.suggestions if hasattr(result, 'suggestions') else [],
+                "warnings": result.warnings if hasattr(result, 'warnings') else []
+            }
+        except Exception as e:
+            await ctx.error(f"Translation with dynamic ICL failed: {str(e)}")
             return {"error": str(e)} 

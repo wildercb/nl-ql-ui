@@ -1,67 +1,34 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 
-export type Theme = 'light' | 'dark' | 'system'
-
-export const useThemeStore = defineStore('theme', () => {
-  const theme = ref<Theme>('system')
-
-  const isDark = computed(() => {
-    if (theme.value === 'system') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches
-    }
-    return theme.value === 'dark'
-  })
-
-  const initializeTheme = () => {
-    // Load theme from localStorage
-    const savedTheme = localStorage.getItem('theme') as Theme
-    if (savedTheme && ['light', 'dark', 'system'].includes(savedTheme)) {
-      theme.value = savedTheme
-    }
-
-    // Apply theme
-    applyTheme()
-
-    // Listen for system theme changes
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      if (theme.value === 'system') {
-        applyTheme()
+export const useThemeStore = defineStore('theme', {
+  state: () => ({
+    darkMode: ref(false)
+  }),
+  actions: {
+    toggleDarkMode() {
+      this.darkMode = !this.darkMode
+      localStorage.setItem('darkMode', JSON.stringify(this.darkMode))
+      if (this.darkMode) {
+        document.documentElement.classList.add('dark')
+      } else {
+        document.documentElement.classList.remove('dark')
       }
-    })
-  }
-
-  const setTheme = (newTheme: Theme) => {
-    theme.value = newTheme
-    localStorage.setItem('theme', newTheme)
-    applyTheme()
-  }
-
-  const applyTheme = () => {
-    const html = document.documentElement
-    if (isDark.value) {
-      html.classList.add('dark')
-    } else {
-      html.classList.remove('dark')
+    },
+    loadTheme() {
+      const savedTheme = localStorage.getItem('darkMode')
+      if (savedTheme) {
+        this.darkMode = JSON.parse(savedTheme)
+        if (this.darkMode) {
+          document.documentElement.classList.add('dark')
+        }
+      } else {
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+        this.darkMode = prefersDark
+        if (prefersDark) {
+          document.documentElement.classList.add('dark')
+        }
+      }
     }
-  }
-
-  const toggleTheme = () => {
-    if (theme.value === 'light') {
-      setTheme('dark')
-    } else if (theme.value === 'dark') {
-      setTheme('system')
-    } else {
-      setTheme('light')
-    }
-  }
-
-  return {
-    theme: computed(() => theme.value),
-    isDark,
-    initializeTheme,
-    setTheme,
-    applyTheme,
-    toggleTheme
   }
 }) 

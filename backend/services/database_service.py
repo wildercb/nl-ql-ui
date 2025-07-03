@@ -183,15 +183,57 @@ async def close_database():
     await db_service.close()
 
 
-async def get_query_logs(limit: int = 100, skip: int = 0) -> List[QueryLog]:
+async def get_query_logs(
+    limit: int = 100, 
+    skip: int = 0, 
+    user_id: Optional[str] = None, 
+    session_id: Optional[str] = None
+) -> List[QueryLog]:
     """
-    Fetch query logs from MongoDB with pagination.
+    Retrieve query logs from MongoDB with optional filtering.
     
     Args:
-        limit (int): Maximum number of query logs to return.
-        skip (int): Number of query logs to skip for pagination.
+        limit (int): Maximum number of logs to return
+        skip (int): Number of logs to skip (for pagination)
+        user_id (Optional[str]): Filter by user ID for authenticated users
+        session_id (Optional[str]): Filter by session ID for guest users
     
     Returns:
-        List[QueryLog]: List of query log entries.
+        List[QueryLog]: List of query log documents
     """
-    return await QueryLog.find().skip(skip).limit(limit).sort(-QueryLog.timestamp).to_list() 
+    try:
+        # Build query filter
+        query_filter = {}
+        
+        if user_id:
+            try:
+                from bson import ObjectId
+                # Try to convert user_id to ObjectId, but handle if it's already ObjectId
+                if isinstance(user_id, str):
+                    query_filter["user_id"] = ObjectId(user_id)
+                else:
+                    query_filter["user_id"] = user_id
+            except Exception as e:
+                logger.error(f"Invalid user_id format: {user_id}, error: {e}")
+                # Return empty list if user_id is invalid
+                return []
+        elif session_id:
+            # For guest sessions, session_id is stored as a string
+            query_filter["session_id"] = session_id
+        
+        logger.info(f"Querying QueryLog with filter: {query_filter}")
+        
+        # Execute query with pagination and sorting
+        query_logs = await QueryLog.find(query_filter) \
+            .sort([("timestamp", -1)]) \
+            .skip(skip) \
+            .limit(limit) \
+            .to_list()
+        
+        logger.info(f"Retrieved {len(query_logs)} query logs")
+        return query_logs
+        
+    except Exception as e:
+        logger.error(f"Error retrieving query logs: {e}")
+        # Return empty list instead of raising exception to prevent 500 errors
+        return [] 
