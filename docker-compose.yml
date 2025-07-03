@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  # Backend API Server
+  backend:
+    image: mppw-mcp-backend
+    container_name: mppw-mcp-backend-1
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./config/debug.env
+    environment:
+      - MONGODB_URL=mongodb://mongo:27017
+      - MONGODB_DATABASE=mppw_mcp
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_DEFAULT_MODEL=phi3:mini
+      - REDIS_URL=redis://redis:6379
+      - ENV=development
+      - SECRET_KEY=supersecretkey123
+      - PYTHONPATH=/app
+    depends_on:
+      - mongo
+      - redis
+      - ollama
+    volumes:
+      - ./backend:/app
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  # FastMCP Server
+  # Temporarily disable fastmcp service due to asyncio issues
+  # fastmcp:
+  #   build: ./backend
+  #   container_name: mppw-mcp-fastmcp
+  #   depends_on:
+  #     - mongo
+  #     - redis
+  #     - ollama
+  #   environment:
+  #     - PYTHONPATH=/app
+  #     - ENVIRONMENT=development
+  #   volumes:
+  #     - ./backend:/app
+  #     - ./config/debug.env:/app/.env
+  #     - ./logs:/app/logs
+  #   command: ["python", "cli.py"]
+  #   networks:
+  #     - mppw-network
+
+  # Frontend Vue.js Application
+  frontend:
+    image: mppw-mcp-frontend
+    container_name: mppw-mcp-frontend-1
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Ollama AI Model Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mppw-mcp-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 10g
+        reservations:
+          memory: 8g
+
+  # MongoDB Database
+  mongo:
+    image: mongo:7
+    environment:
+      - MONGO_INITDB_DATABASE=mppw_mcp
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./backend/database/init.js:/docker-entrypoint-initdb.d/init.js
+
+  # Redis for Caching and Session Management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # GraphQL Schema Registry (Future)
+  # schema-registry:
+  #   image: confluentinc/cp-schema-registry:latest
+  #   ports:
+  #     - "8081:8081"
+  #   environment:
+  #     - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+  #     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092
+
+volumes:
+  mongo_data:
+  redis_data:
+  ollama:
+
+networks:
+  default:
+    name: mppw-mcp-network 

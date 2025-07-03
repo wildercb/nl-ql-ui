@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 5px; }
+        button { padding: 10px 20px; margin: 5px; }
+        textarea { width: 100%; height: 100px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>API Test Page</h1>
+    
+    <div>
+        <label for="query">Query:</label><br>
+        <textarea id="query" placeholder="Enter your query here...">get all users</textarea>
+    </div>
+    
+    <div>
+        <button onclick="testAPI()">Test API</button>
+        <button onclick="testTranslate()">Test Translate</button>
+        <button onclick="clearResult()">Clear</button>
+    </div>
+    
+    <div id="result" class="result">Results will appear here...</div>
+    
+    <script>
+        async function testAPI() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing API connection...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/translate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        natural_query: 'get all users',
+                        model: 'phi3:mini'
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    resultDiv.innerHTML = `
+                        <h3>✅ API Test Successful!</h3>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `❌ API Test Failed: HTTP ${response.status}`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `💥 API Test Error: ${error.message}`;
+            }
+        }
+        
+        async function testTranslate() {
+            const query = document.getElementById('query').value;
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Translating...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/translate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        natural_query: query,
+                        model: 'phi3:mini'
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    resultDiv.innerHTML = `
+                        <h3>✅ Translation Successful!</h3>
+                        <h4>GraphQL Query:</h4>
+                        <pre>${data.graphql_query}</pre>
+                        <h4>Details:</h4>
+                        <ul>
+                            <li>Confidence: ${(data.confidence * 100).toFixed(1)}%</li>
+                            <li>Model: ${data.model}</li>
+                            <li>Processing Time: ${data.processing_time.toFixed(2)}s</li>
+                            <li>Explanation: ${data.explanation || 'None'}</li>
+                        </ul>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `❌ Translation Failed: HTTP ${response.status}`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `💥 Translation Error: ${error.message}`;
+            }
+        }
+        
+        function clearResult() {
+            document.getElementById('result').innerHTML = 'Results cleared...';
+        }
+    </script>
+</body>
+</html> 
