@@ -215,11 +215,15 @@ const handleStreamEvent = (event: any) => {
       const agentMessage = chatMessages.value.find(m => m.agent === data.agent && m.isStreaming);
       if (agentMessage) {
         agentMessage.isStreaming = false;
-        if (data.agent === 'translator' && data.result?.graphql_query) {
+        if (data.agent === 'reviewer') {
+          agentMessage.content = formatReviewResult(data.result);
+        } else if (data.agent === 'rewriter') {
+          agentMessage.content = data.result?.rewritten_query || '';
+        } else if (data.agent === 'translator' && data.result?.graphql_query) {
           console.log('🔍 Setting GraphQL query:', data.result.graphql_query);
           finalGraphQLQuery.value = data.result.graphql_query;
         }
-        console.log('💬 Marked agent as completed, kept output');
+        console.log('💬 Marked agent as completed, kept output or set result');
       } else {
         console.log('⚠️ Could not find agent message for completion:', data.agent);
       }
@@ -293,6 +297,12 @@ const onGuestSession = (sessionData: any) => { authStore.setGuestSession(session
 onMounted(() => {
   authStore.loadPersistedSession();
 });
+
+function formatReviewResult(result) {
+  if (!result) return '';
+  // Show comments and improvements as pretty JSON
+  return `<pre>${JSON.stringify(result, null, 2)}</pre>`;
+}
 </script>
 
 <style scoped>
