@@ -15,6 +15,8 @@ services:
     environment:
       - MONGODB_URL=mongodb://mongo:27017
       - MONGODB_DATABASE=mppw_mcp
+      - DATA_MONGODB_URL=mongodb://mongo_data:27017
+      - DATA_MONGODB_DATABASE=mppw_content
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_DEFAULT_MODEL=phi3:mini
       - REDIS_URL=redis://redis:6379
@@ -23,11 +25,14 @@ services:
       - PYTHONPATH=/app
     depends_on:
       - mongo
+      - mongo_data
       - redis
       - ollama
+      - neo4j
     volumes:
       - ./backend:/app
       - ./logs:/app/logs
+    working_dir: /app
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -35,7 +40,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/api"]
 
   # FastMCP Server
   # Temporarily disable fastmcp service due to asyncio issues
@@ -101,6 +106,17 @@ services:
       - mongo_data:/data/db
       - ./backend/database/init.js:/docker-entrypoint-initdb.d/init.js
 
+  # Secondary MongoDB for content data
+  mongo_data:
+    image: mongo:7
+    environment:
+      - MONGO_INITDB_DATABASE=mppw_content
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_content_data:/data/db
+    restart: unless-stopped
+
   # Redis for Caching and Session Management
   redis:
     image: redis:7-alpine
@@ -119,10 +135,24 @@ services:
   #     - SCHEMA_REGISTRY_HOST_NAME=schema-registry
   #     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092
 
+  # Neo4j Database
+  neo4j:
+    image: neo4j:5.19
+    ports:
+      - "7474:7474"  # http
+      - "7687:7687"  # bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
 volumes:
   mongo_data:
   redis_data:
   ollama:
+  mongo_content_data:
+  neo4j_data:
 
 networks:
   default:

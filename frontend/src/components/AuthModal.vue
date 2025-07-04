@@ -1,6 +1,6 @@
 <template>
   <div 
-    v-if="isVisible" 
+    v-if="show" 
     class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 backdrop-blur-sm"
     @click="closeModal"
   >
@@ -266,209 +266,113 @@
   </div>
 </template>
 
-<script>
-import { ref, computed } from 'vue';
+<script setup lang="ts">
+import { ref, reactive, computed, watch, defineProps, defineEmits } from 'vue';
+import { useAuthStore } from '../stores/auth';
 
-export default {
-  name: 'AuthModal',
-  props: {
-    visible: {
-      type: Boolean,
-      default: false
-    }
-  },
-  emits: ['close', 'authenticated', 'guest-session'],
-  setup(props, { emit }) {
-    const isLogin = ref(true);
-    const showPassword = ref(false);
-    const isLoading = ref(false);
-    const error = ref('');
-    const debugMode = ref(true); // Set to false in production
+const props = defineProps<{
+  show: boolean;
+}>();
 
-    // Separate data objects for login and registration
-    const loginData = ref({
-      username: '',
-      password: '',
-      remember_me: false
-    });
+const emit = defineEmits(['close', 'authenticated', 'guest']);
 
-    const registerData = ref({
-      username: '',
-      email: '',
-      password: '',
-      full_name: ''
-    });
+const authStore = useAuthStore();
 
-    const isVisible = computed(() => props.visible);
+const isLogin = ref(true);
+const isLoading = ref(false);
+const error = ref<string | null>(null);
+const showPassword = ref(false);
+const debugMode = ref(false);
 
-    const inputClasses = computed(() => 
-      'w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-colors duration-200'
-    );
+const loginData = reactive({
+  username: '',
+  password: '',
+  remember_me: false
+});
 
-    const switchToLogin = () => {
-      isLogin.value = true;
-      error.value = '';
-      console.log('Switched to login mode');
-    };
+const registerData = reactive({
+  username: '',
+  email: '',
+  password: '',
+  full_name: ''
+});
 
-    const switchToRegister = () => {
-      isLogin.value = false;
-      error.value = '';
-      console.log('Switched to registration mode');
-    };
-
-    const closeModal = () => {
-      emit('close');
-      resetForm();
-    };
-
-    const resetForm = () => {
-      loginData.value = {
-        username: '',
-        password: '',
-        remember_me: false
-      };
-      registerData.value = {
-        username: '',
-        email: '',
-        password: '',
-        full_name: ''
-      };
-      error.value = '';
-      isLoading.value = false;
-      showPassword.value = false;
-    };
-
-    const getPayload = () => {
-      return isLogin.value ? loginData.value : registerData.value;
-    };
-
-    const submitForm = async () => {
-      error.value = '';
-      isLoading.value = true;
-
-      try {
-        const endpoint = isLogin.value ? '/auth/login' : '/auth/register';
-        const payload = getPayload();
-
-        console.log(`=== ${isLogin.value ? 'LOGIN' : 'REGISTRATION'} ATTEMPT ===`);
-        console.log('Endpoint:', `/api${endpoint}`);
-        console.log('Payload:', JSON.stringify(payload, null, 2));
-
-        const response = await fetch(`/api${endpoint}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload)
-        });
-
-        console.log('Response status:', response.status);
-        
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.log('Error response:', errorData);
-          
-          let errorMessage = 'Authentication failed';
-          if (errorData.detail) {
-            if (Array.isArray(errorData.detail)) {
-              errorMessage = errorData.detail.map(err => err.msg || err).join(', ');
-            } else if (typeof errorData.detail === 'string') {
-              errorMessage = errorData.detail;
-            } else {
-              errorMessage = JSON.stringify(errorData.detail);
-            }
-          }
-          
-          throw new Error(errorMessage);
-        }
-
-        const data = await response.json();
-        console.log('Success response:', data);
-        
-        // Store authentication data
-        if (data.access_token) {
-          localStorage.setItem('access_token', data.access_token);
-        }
-        if (data.refresh_token) {
-          localStorage.setItem('refresh_token', data.refresh_token);
-        }
-        if (data.user) {
-          localStorage.setItem('user_data', JSON.stringify(data.user));
-        }
-
-        emit('authenticated', data);
-        closeModal();
-
-      } catch (err) {
-        console.error('Authentication error:', err);
-        error.value = err.message || 'Authentication failed';
-      } finally {
-        isLoading.value = false;
-      }
-    };
-
-    const continueAsGuest = async () => {
-      isLoading.value = true;
-      try {
-        console.log('=== GUEST SESSION ATTEMPT ===');
-        
-        const response = await fetch('/api/auth/guest', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        });
-
-        console.log('Guest response status:', response.status);
-
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.log('Guest error response:', errorData);
-          throw new Error(errorData.detail || 'Failed to create guest session');
-        }
-
-        const data = await response.json();
-        console.log('Guest success response:', data);
-        
-        // Store guest session data
-        if (data.session_id) {
-          localStorage.setItem('guest_session_id', data.session_id);
-        }
-        if (data.session_token) {
-          localStorage.setItem('guest_session_token', data.session_token);
-        }
-
-        emit('guest-session', data);
-        closeModal();
-
-      } catch (err) {
-        console.error('Guest session error:', err);
-        error.value = err.message || 'Failed to create guest session';
-      } finally {
-        isLoading.value = false;
-      }
-    };
-
-    return {
-      isLogin,
-      showPassword,
-      isLoading,
-      error,
-      debugMode,
-      loginData,
-      registerData,
-      isVisible,
-      inputClasses,
-      switchToLogin,
-      switchToRegister,
-      closeModal,
-      submitForm,
-      continueAsGuest,
-      getPayload
-    };
+const closeModal = () => {
+  if (!isLoading.value) {
+    emit('close');
   }
 };
+
+const switchToLogin = () => {
+  isLogin.value = true;
+  error.value = null;
+};
+
+const switchToRegister = () => {
+  isLogin.value = false;
+  error.value = null;
+};
+
+const submitForm = async () => {
+  error.value = null;
+  isLoading.value = true;
+  const endpoint = isLogin.value ? '/api/auth/login' : '/api/auth/register';
+  const payload = isLogin.value ? loginData : registerData;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'An error occurred.');
+    }
+
+    authStore.setAuthenticated(data);
+    emit('authenticated', data);
+    closeModal();
+  } catch (err: any) {
+    error.value = err.message;
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const continueAsGuest = async () => {
+  isLoading.value = true;
+  try {
+    const response = await fetch('/api/auth/guest', { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to create guest session');
+    }
+    emit('guest', data);
+    closeModal();
+  } catch (err: any) {
+    error.value = err.message;
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const inputClasses = computed(() => [
+  'w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-lg focus:ring-green-500 focus:border-green-500 transition-all duration-200',
+  'placeholder-gray-400 text-gray-900'
+]);
+
+// Reset form when modal is opened/closed
+watch(() => props.show, (newVal) => {
+  if (newVal) {
+    isLogin.value = true;
+    error.value = null;
+    Object.assign(loginData, { username: '', password: '', remember_me: false });
+    Object.assign(registerData, { full_name: '', username: '', email: '', password: '' });
+  }
+});
 </script>
 
 <style scoped>

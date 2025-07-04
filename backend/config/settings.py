@@ -17,6 +17,17 @@ class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MONGODB_")
 
 
+class DataDatabaseSettings(BaseSettings):
+    """Secondary MongoDB for content data."""
+    
+    url: str = Field("mongodb://mongo_data:27018")
+    database: str = Field("mppw_content")
+    min_connections: int = Field(10)
+    max_connections: int = Field(100)
+    
+    model_config = SettingsConfigDict(env_prefix="DATA_MONGODB_")
+
+
 class RedisSettings(BaseSettings):
     """Redis configuration."""
     
@@ -68,10 +79,23 @@ class MCPSettings(BaseSettings):
 class SecuritySettings(BaseSettings):
     """Security and authentication configuration."""
     
-    secret_key: str = Field(...)
+    # NOTE: Provide a sensible default so that the application can boot in local/dev
+    # environments.  The value can (and **should**) be overridden in production by
+    # setting an environment variable named `SECRET_KEY` or `SECURITY_SECRET_KEY`.
+    # By specifying both `alias="SECRET_KEY"` *and* an `env_prefix` (via
+    # `SettingsConfigDict`) we make it possible to reference the value with either
+    # naming scheme:
+    #   * SECRET_KEY
+    #   * SECURITY_SECRET_KEY
+    # The latter follows the standard nested-settings convention, while the former
+    # matches the variable already present in docker-compose.yml.
+    secret_key: str = Field("change_me_please", alias="SECRET_KEY")
     access_token_expire_minutes: int = Field(30)
     refresh_token_expire_days: int = Field(30)
     algorithm: str = Field("HS256")
+
+    # Allow both prefixed and un-prefixed env vars
+    model_config = SettingsConfigDict(env_prefix="SECURITY_")
 
 
 class CORSSettings(BaseSettings):
@@ -156,6 +180,15 @@ class LLMTrackingSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LLM_TRACKING_")
 
 
+class Neo4jSettings(BaseSettings):
+    """Neo4j graph database for content via Cypher."""
+    uri: str = Field("bolt://neo4j:7687")
+    user: str = Field("neo4j")
+    password: str = Field("password")
+
+    model_config = SettingsConfigDict(env_prefix="NEO4J_")
+
+
 class Settings(BaseSettings):
     """Main application settings."""
     
@@ -163,6 +196,7 @@ class Settings(BaseSettings):
     
     # Sub-configurations
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
+    data_database: DataDatabaseSettings = Field(default_factory=DataDatabaseSettings)
     redis: RedisSettings = Field(default_factory=RedisSettings)
     ollama: OllamaSettings = Field(default_factory=OllamaSettings)
     api: APISettings = Field(default_factory=APISettings)
@@ -176,6 +210,7 @@ class Settings(BaseSettings):
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     query: QuerySettings = Field(default_factory=QuerySettings)
     llm_tracking: LLMTrackingSettings = Field(default_factory=LLMTrackingSettings)
+    neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
     
     @property
     def is_development(self) -> bool:

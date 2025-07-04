@@ -181,6 +181,48 @@ class OllamaService:
                 logger.error(f"❌ Generation failed: {error_message}")
                 raise
     
+    async def stream_chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Yields chat completion tokens as they are generated."""
+        model = model or self.default_model
+        temperature = temperature or self.settings.ollama.temperature
+        max_tokens = max_tokens or self.settings.ollama.max_tokens
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "options": {"temperature": temperature, "num_predict": max_tokens}
+        }
+        
+        url = f"{self.base_url}/api/chat"
+        
+        try:
+            async with self.client.stream("POST", url, json=payload, timeout=self.timeout) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        try:
+                            # A chunk can have multiple JSON objects
+                            for line in chunk.decode('utf-8').splitlines():
+                                if line:
+                                    data = json.loads(line)
+                                    yield data
+                        except json.JSONDecodeError:
+                            logger.warning(f"Failed to decode stream chunk: {chunk}")
+                            continue
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Ollama API HTTP error during stream: {e.response.status_code} - {await e.response.aread()}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during Ollama stream: {e}")
+            raise
+
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],

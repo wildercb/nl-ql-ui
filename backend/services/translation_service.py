@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import httpx
+import asyncio
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
@@ -83,7 +84,7 @@ class TranslationService:
         except Exception as e:
             logger.warning(f"Failed to broadcast interaction: {e}")
 
-    def _build_system_prompt(self, schema_context: str = "", icl_examples: List[str] = None) -> str:
+    def _build_system_prompt(self, schema_context: str = "", icl_examples: Optional[List[str]] = None) -> str:
         """Build system prompt for GraphQL translation."""
         base_prompt = """You are a GraphQL expert. Translate natural language to GraphQL queries.
 
@@ -194,190 +195,112 @@ Only return JSON, no extra text."""
         schema_context: str = "",
         model: Optional[str] = None,
         icl_examples: Optional[List[str]] = None
-    ) -> TranslationResult:
-        """Translate natural language query to GraphQL."""
-        start_time = time.time()
-        
+    ):
+        """
+        Translate natural language query to GraphQL, yielding events for streaming.
+        """
         if not natural_query.strip():
             raise ValueError("Natural language query cannot be empty")
-        
+
         model = model or self.settings.ollama.default_model
-        # Use provided ICL examples or default to initial examples
-        selected_icl_examples = icl_examples if icl_examples is not None else get_initial_icl_examples()[:3]  # Limit to 3 examples for brevity
+        selected_icl_examples = icl_examples if icl_examples is not None else get_initial_icl_examples()[:3]
         system_prompt = self._build_system_prompt(schema_context, selected_icl_examples)
         
-        # Build the user prompt
         user_prompt = f"""Convert this natural language query to GraphQL:
 
 "{natural_query}"
 
 Remember to return only the JSON object with the specified structure."""
 
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        yield {"event": "prompt_generated", "prompt": messages}
+
+        full_response_text = ""
         try:
-            # Use chat completion for better context handling
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
-            
-            response = await self.ollama_service.chat_completion(
+            stream = self.ollama_service.stream_chat_completion(
                 messages=messages,
                 model=model,
-                temperature=0.3,  # Lower temperature for more consistent output
+                temperature=0.3,
                 max_tokens=2048
             )
+            async for chunk in stream:
+                token = chunk.get("message", {}).get("content", "")
+                if token:
+                    full_response_text += token
+                    yield {"event": "agent_token", "token": token}
             
-            # Parse the response
-            result_data = self._extract_json_from_response(response.text)
+            # Final processing after stream is complete
+            result_data = self._extract_json_from_response(full_response_text)
             
-            # Extract components
             graphql_query = result_data.get("graphql", "")
             confidence = float(result_data.get("confidence", 0.0))
-            explanation = result_data.get("explanation", "")
-            warnings = result_data.get("warnings", [])
-            suggestions = result_data.get("suggestions", [])
-            
-            # Validate the generated GraphQL
             is_valid, syntax_warnings = self._validate_graphql_syntax(graphql_query)
-            warnings.extend(syntax_warnings)
             
-            # Adjust confidence based on validation
             if not is_valid:
                 confidence = max(0.0, confidence - 0.3)
-            
-            processing_time = time.time() - start_time
-            
-            await self._broadcast_interaction(
-                model,
-                system_prompt,
-                user_prompt,
-                response.text,
-                json.dumps(result_data),
-                processing_time,
-                confidence,
-                warnings
-            )
-            
-            return TranslationResult(
-                graphql_query=graphql_query,
-                confidence=confidence,
-                explanation=explanation,
-                model_used=model,
-                processing_time=processing_time,
-                original_query=natural_query,
-                suggested_improvements=suggestions,
-                warnings=warnings
-            )
-            
+                result_data["warnings"] = result_data.get("warnings", []) + syntax_warnings
+
+            final_result = {
+                "graphql_query": graphql_query,
+                "confidence": confidence,
+                "explanation": result_data.get("explanation", ""),
+                "warnings": result_data.get("warnings", []),
+                "suggestions": result_data.get("suggestions", [])
+            }
+
+            yield {"event": "translation_complete", "result": final_result}
+
         except Exception as e:
-            logger.error(f"Translation failed: {e}")
-            processing_time = time.time() - start_time
-            
-            await self._broadcast_interaction(
-                model,
-                system_prompt,
-                user_prompt,
-                "",
-                "",
-                processing_time,
-                0.0,
-                [f"Error: {str(e)}"],
-                None,
-                None
-            )
-            
-            return TranslationResult(
-                graphql_query="",
-                confidence=0.0,
-                explanation="Unable to translate the query due to a connection issue or internal error.",
-                model_used=model,
-                processing_time=processing_time,
-                original_query=natural_query,
-                suggested_improvements=["Please try again. If the issue persists, check the server status or contact support.", "Simplify your query or provide more context."],
-                warnings=[f"Error: {str(e)}"]
-            )
+            logger.error(f"Translation streaming failed: {e}")
+            yield {"event": "error", "message": str(e)}
 
     async def batch_translate(
-        self,
         queries: List[str],
         schema_context: str = "",
         model: Optional[str] = None
     ) -> List[TranslationResult]:
-        """Translate multiple natural language queries to GraphQL."""
-        results = []
+        """Translate multiple natural language queries to GraphQL in parallel."""
         
-        for query in queries:
-            try:
-                result = await self.translate_to_graphql(query, schema_context, model)
-                results.append(result)
-            except Exception as e:
-                logger.error(f"Failed to translate query '{query}': {e}")
-                results.append(TranslationResult(
-                    graphql_query=f"# Error: {str(e)}",
-                    confidence=0.0,
-                    explanation=f"Batch translation failed: {str(e)}",
-                    model_used=model or self.settings.ollama.default_model,
-                    processing_time=0.0,
-                    original_query=query,
-                    suggested_improvements=[],
-                    warnings=[str(e)]
-                ))
-        
-        return results
-
-    def get_translation_examples(self) -> List[Dict[str, str]]:
-        """Get example translations for training/demonstration."""
-        return [
-            {
-                "natural": "Get all users with their email addresses",
-                "graphql": "query GetUsers {\n  users {\n    id\n    email\n  }\n}"
-            },
-            {
-                "natural": "Find posts by a specific author with comments",
-                "graphql": "query GetPostsByAuthor($authorId: ID!) {\n  posts(authorId: $authorId) {\n    id\n    title\n    content\n    comments {\n      id\n      text\n      author {\n        name\n      }\n    }\n  }\n}"
-            },
-            {
-                "natural": "Create a new post with title and content",
-                "graphql": "mutation CreatePost($title: String!, $content: String!) {\n  createPost(input: {title: $title, content: $content}) {\n    id\n    title\n    content\n    createdAt\n  }\n}"
-            },
-            {
-                "natural": "Update user profile information",
-                "graphql": "mutation UpdateProfile($userId: ID!, $input: UserUpdateInput!) {\n  updateUser(id: $userId, input: $input) {\n    id\n    name\n    email\n    profile {\n      bio\n      avatar\n    }\n  }\n}"
-            }
+        service = TranslationService()
+        tasks = [
+            service.translate_to_graphql(
+                natural_query=query,
+                schema_context=schema_context,
+                model=model
+            ) 
+            for query in queries
         ]
+        
+        results_with_prompts = await asyncio.gather(*tasks)
+        # Return only the TranslationResult object from each tuple
+        return [result for _prompt, result in results_with_prompts]
+
+def get_translation_examples() -> List[str]:
+    """
+    Returns a list of few-shot examples for ICL.
+    
+    This function demonstrates how to provide dynamic or static examples
+    to improve translation accuracy for specific domains or query patterns.
+    """
+    return get_initial_icl_examples()
+
 
 async def chat_with_model(query: str, model: str, context: List[Dict[str, Any]]) -> str:
     """
-    Handle a chat interaction with the specified model using conversation context.
-    
-    Args:
-        query (str): The user's chat message.
-        model (str): The model to use for generating the response.
-        context (List[Dict[str, Any]]): The conversation history/context.
-    
-    Returns:
-        str: The model's response.
+    A simple chat interface for direct interaction with an Ollama model.
+    This is useful for debugging, testing prompts, or direct model interaction.
     """
-    start_time = time.time()
-    logger.info(f"Initiating chat with model {model} for query: {query}")
-    
+    service = OllamaService()
     try:
-        ollama_service = OllamaService()
-        
-        # Format the context into a conversation history for the model
-        messages = []
-        for msg in context:
-            role = 'user' if msg.get('sender') == 'user' else 'assistant'
-            messages.append({'role': role, 'content': msg.get('content', '')})
-        
-        # Add the current user query
-        messages.append({'role': 'user', 'content': query})
-        
-        # Call Ollama API for chat response
-        response = await ollama_service.chat(model, messages)
-        logger.info(f"Chat response received from {model}")
-        
-        return response.get('message', {}).get('content', 'No response content available.')
+        response = await service.chat_completion(
+            messages=context + [{"role": "user", "content": query}],
+            model=model or service.default_model
+        )
+        return response.text
     except Exception as e:
-        logger.error(f"Chat failed: {e}")
-        raise 
+        logger.error(f"Chat with model failed: {e}")
+        return f"Error: {e}" 

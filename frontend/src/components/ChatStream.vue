@@ -1,104 +1,156 @@
 <template>
-  <div ref="container" class="rounded-2xl border border-gray-200 dark:border-gray-700 shadow-lg overflow-hidden bg-white dark:bg-gray-900">
-    <!-- Header -->
-    <div class="border-b border-gray-200 dark:border-gray-700 px-6 py-4 bg-white dark:bg-gray-900">
-      <h3 class="text-lg font-bold flex items-center text-gray-800 dark:text-gray-100">
-        <i class="fas fa-project-diagram mr-2 text-purple-600"></i>
-        <span>{{ title }}</span>
-      </h3>
-    </div>
-
-    <!-- Message list -->
-    <div ref="scrollArea" class="max-h-[60vh] overflow-y-auto px-6 py-4 space-y-6 custom-scrollbar bg-white dark:bg-gray-900">
-      <!-- Empty state -->
-      <div v-if="messages.length === 0 && !loading" class="text-center text-gray-400">
-        <i class="fas fa-robot text-4xl text-purple-500 mb-4"></i>
-        <p>No messages yet</p>
+  <div class="h-full flex flex-col">
+    <div ref="scrollArea" class="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      <div v-if="messages.length === 0" class="text-center text-gray-400 pt-8">
+        <i class="fas fa-comments text-4xl mb-2"></i>
+        <p class="font-semibold">{{ title }}</p>
+        <p class="text-sm">Enter a query below to start the conversation.</p>
       </div>
 
-      <!-- Messages -->
-      <div
-        v-for="(msg, idx) in messages"
-        :key="idx"
-        class="flex items-start space-x-3"
-      >
-        <!-- Avatar -->
-        <div
-          :class="[
-            'w-9 h-9 rounded-full flex items-center justify-center text-white text-sm flex-shrink-0',
-            msg.role === 'user' ? 'bg-green-600' : 'bg-purple-600'
-          ]"
-        >
-          {{ msg.role === 'user' ? 'U' : (msg.agent?.charAt(0).toUpperCase() || 'A') }}
+      <div v-for="(msg, index) in messages" :key="index" :class="messageClass(msg)">
+        <div v-if="msg.role === 'user'" class="flex items-end justify-end">
+          <div class="bg-blue-600 text-white p-3 rounded-lg max-w-lg shadow-md">
+            <p v-html="renderMarkdown(msg.content)"></p>
+            <div class="text-right text-xs text-blue-200 mt-1">{{ msg.timestamp }}</div>
+          </div>
+          <div class="w-8 h-8 ml-2 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">U</div>
         </div>
 
-        <!-- Bubble -->
-        <div class="flex-1">
-          <div
-            :class="[
-              'inline-block rounded-xl px-4 py-3 whitespace-pre-wrap break-words shadow',
-              msg.role === 'user'
-                ? 'bg-green-50 text-gray-800 border border-green-200 dark:bg-green-900/30 dark:border-green-700 dark:text-green-100'
-                : 'bg-purple-50 text-gray-800 border border-purple-200 dark:bg-purple-900/40 dark:border-purple-700 dark:text-purple-100'
-            ]"
-          >
-            {{ msg.content }}
+        <div v-else class="flex items-start">
+          <div class="w-8 h-8 mr-2 rounded-full bg-gray-700 text-white flex items-center justify-center">
+            <i :class="getAgentIcon(msg.agent)"></i>
           </div>
-          <div class="text-xs text-gray-500 mt-1">
-            {{ msg.agent || 'You' }} • {{ msg.timestamp }}
+          <div class="bg-gray-700 p-3 rounded-lg max-w-lg shadow-md">
+            <p class="font-bold text-purple-400 text-sm capitalize">{{ msg.agent }}</p>
+            <div class="text-white prose prose-sm max-w-none" v-html="renderMarkdown(msg.content)"></div>
+            <div v-if="msg.isStreaming" class="typing-indicator">
+              <span></span><span></span><span></span>
+            </div>
+            <div class="text-left text-xs text-gray-400 mt-1">{{ msg.timestamp }}</div>
           </div>
         </div>
       </div>
-
-      <!-- Loading spinner -->
-      <div v-if="loading" class="text-center py-4">
-        <i class="fas fa-spinner fa-spin text-purple-500"></i>
+       <div v-if="loading" class="flex items-center justify-center p-4">
+          <i class="fas fa-spinner fa-spin text-2xl text-purple-500"></i>
+          <span class="ml-2">Processing...</span>
       </div>
     </div>
-
-    <!-- Optional footer slot for future input -->
-    <slot name="footer" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { defineProps, ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick } from 'vue';
+import { marked } from 'marked';
 
 interface Message {
-  role: 'user' | 'agent'
-  agent?: string
-  content: string
-  timestamp: string
+  role: 'user' | 'agent';
+  agent?: string;
+  content: string;
+  timestamp: string;
+  isStreaming?: boolean;
 }
 
-const props = defineProps<{ title?: string; messages: Message[]; loading: boolean }>()
+const props = defineProps<{
+  title?: string;
+  messages: Message[];
+  loading: boolean;
+}>();
 
-const scrollArea = ref<HTMLElement | null>(null)
+const scrollArea = ref<HTMLElement | null>(null);
 
 const scrollToBottom = () => {
   nextTick(() => {
     if (scrollArea.value) {
-      scrollArea.value.scrollTop = scrollArea.value.scrollHeight
+      scrollArea.value.scrollTop = scrollArea.value.scrollHeight;
     }
-  })
-}
+  });
+};
 
-watch(
-  () => props.messages.length,
-  () => scrollToBottom()
-)
+const renderMarkdown = (content: string) => {
+  if (!content) return '';
+  return marked(content, { gfm: true, breaks: true });
+};
+
+const messageClass = (msg: Message) => {
+  return msg.role === 'user' ? 'justify-end' : 'justify-start';
+};
+
+const getAgentIcon = (agentName?: string) => {
+  const icons: { [key: string]: string } = {
+    rewriter: 'fas fa-pencil-alt',
+    translator: 'fas fa-language',
+    reviewer: 'fas fa-check-double',
+    optimizer: 'fas fa-bolt',
+    system: 'fas fa-cogs'
+  };
+  return icons[agentName || 'system'] || 'fas fa-robot';
+};
+
+watch(() => props.messages, scrollToBottom, { deep: true });
+watch(() => props.loading, scrollToBottom);
+
 </script>
 
 <style scoped>
-/* Custom scrollbar styling */
+.prose {
+  color: inherit;
+}
+.prose :where(code):not(:where([class~="not-prose"] *))::before,
+.prose :where(code):not(:where([class~="not-prose"] *))::after {
+  content: none;
+}
+.prose :where(pre) {
+    background-color: #111827; /* bg-gray-900 */
+    color: #e5e7eb; /* text-gray-200 */
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+}
+.prose :where(code) {
+    background-color: #374151; /* bg-gray-700 */
+    color: #f3f4f6; /* text-gray-100 */
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.85em;
+    font-weight: 600;
+}
+.prose pre code {
+  background-color: transparent;
+  padding: 0;
+  font-weight: inherit;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgba(156, 163, 175, 0.6); /* gray-500 */
-  border-radius: 3px;
+  background-color: #4B5563; /* bg-gray-600 */
+  border-radius: 4px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background-color: transparent;
+}
+
+.typing-indicator {
+  display: inline-block;
+  margin-left: 6px;
+}
+.typing-indicator span {
+  height: 6px;
+  width: 6px;
+  background-color: #a78bfa; /* purple-400 */
+  border-radius: 50%;
+  display: inline-block;
+  animation: wave 1.3s infinite;
+}
+.typing-indicator span:nth-of-type(2) {
+  animation-delay: -1.1s;
+}
+.typing-indicator span:nth-of-type(3) {
+  animation-delay: -0.9s;
+}
+@keyframes wave {
+  0%, 60%, 100% { transform: translate(0, 0); }
+  30% { transform: translate(0, -6px); }
 }
 </style> 

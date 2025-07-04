@@ -19,6 +19,7 @@ interface AuthState {
   guestSessionToken: string | null
   isAuthenticated: boolean
   isGuest: boolean
+  guestHistory: any[]
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -29,7 +30,8 @@ export const useAuthStore = defineStore('auth', {
     guestSessionId: null,
     guestSessionToken: null,
     isAuthenticated: false,
-    isGuest: false
+    isGuest: false,
+    guestHistory: []
   }),
   
   getters: {
@@ -40,6 +42,11 @@ export const useAuthStore = defineStore('auth', {
   },
   
   actions: {
+    addGuestHistoryItem(item: any) {
+      if (this.isGuest) {
+        this.guestHistory.unshift(item);
+      }
+    },
     setAuthenticated(authData: any) {
       console.log('Setting authenticated user:', authData);
       
@@ -71,6 +78,7 @@ export const useAuthStore = defineStore('auth', {
       this.guestSessionToken = sessionData.session_token;
       this.isAuthenticated = true;
       this.isGuest = true;
+      this.guestHistory = [];
       
       // Store in localStorage
       localStorage.setItem('guest_session_id', sessionData.session_id);
@@ -89,6 +97,7 @@ export const useAuthStore = defineStore('auth', {
       this.guestSessionToken = null;
       this.isAuthenticated = false;
       this.isGuest = false;
+      this.guestHistory = [];
       
       // Clear localStorage
       localStorage.removeItem('access_token');
@@ -132,6 +141,7 @@ export const useAuthStore = defineStore('auth', {
         this.guestSessionToken = guestSessionToken;
         this.isAuthenticated = true;
         this.isGuest = true;
+        this.guestHistory = [];
         
         console.log('Loaded guest session:', guestSessionId);
         return;

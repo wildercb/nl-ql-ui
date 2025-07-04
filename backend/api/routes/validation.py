@@ -15,13 +15,13 @@ router = APIRouter()
 class ValidationRequest(BaseModel):
     """Request model for GraphQL validation."""
     query: str = Field(..., min_length=1, description="GraphQL query to validate")
-    schema: Optional[str] = Field(None, description="GraphQL schema for validation")
+    graphql_schema: Optional[str] = Field(None, description="GraphQL schema for validation")
 
 
 class BatchValidationRequest(BaseModel):
     """Request model for batch validation."""
     queries: List[str] = Field(..., min_items=1, max_items=20, description="List of GraphQL queries to validate")
-    schema: Optional[str] = Field(None, description="GraphQL schema for validation")
+    graphql_schema: Optional[str] = Field(None, description="GraphQL schema for validation")
 
 
 class ValidationResponse(BaseModel):
@@ -65,11 +65,11 @@ async def validate_query(
 ):
     """Validate a GraphQL query."""
     try:
-        logger.info("Validation request", query_length=len(request.query), has_schema=bool(request.schema))
+        logger.info("Validation request", query_length=len(request.query), has_schema=bool(request.graphql_schema))
         
         result = await validation_service.validate_query(
             query=request.query,
-            schema=request.schema
+            schema=request.graphql_schema
         )
         
         # Get additional query info
@@ -102,7 +102,7 @@ async def validate_queries_batch(
         
         results = await validation_service.validate_queries_batch(
             queries=request.queries,
-            schema=request.schema
+            schema=request.graphql_schema
         )
         
         responses = []
@@ -158,7 +158,7 @@ async def analyze_query(
         # Validate the query
         validation_result = await validation_service.validate_query(
             query=request.query,
-            schema=request.schema
+            schema=request.graphql_schema
         )
         
         # Extract detailed query information
