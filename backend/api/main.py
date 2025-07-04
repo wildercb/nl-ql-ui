@@ -16,7 +16,7 @@ from .middleware import (
     SecurityMiddleware,
     CacheMiddleware
 )
-from .routes import health, translation, validation, models, analytics, interactions, history, chat, auth
+from .routes import health, translation, validation, models, analytics, interactions, history, chat, auth, agent_demo, agent_demo_stream
 
 # Configure logging
 logging.basicConfig(
@@ -103,6 +103,8 @@ app.include_router(interactions.router)  # Live interactions streaming
 app.include_router(history.router)  # Query history
 app.include_router(chat.router)  # Chat functionality
 app.include_router(auth.router)  # Authentication endpoints
+app.include_router(agent_demo.router)  # Multi-agent demo endpoint (blocking)
+app.include_router(agent_demo_stream.router)  # Multi-agent streaming SSE endpoint
 
 logger.info(f"📍 API routes registered: {len(app.routes)} endpoints")
 

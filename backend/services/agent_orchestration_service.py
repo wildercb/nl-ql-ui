@@ -15,6 +15,7 @@ into FastAPI routes without side-effects.
 import json
 import logging
 import time
+import re
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
@@ -102,7 +103,28 @@ class AgentOrchestrationService:
             {"role": "user", "content": query},
         ]
         response = await self._call_llm(messages, model)
-        return response.text.strip().strip("`")  # remove accidental code fencing
+        raw = response.text.strip()
+        cleaned = self._sanitize_rewritten_query(raw)
+        return cleaned
+
+    def _sanitize_rewritten_query(self, text: str) -> str:
+        """Attempt to extract a plain rewrite from various possible formats."""
+        # Remove markdown fences
+        text = re.sub(r"```[a-zA-Z]*", "", text).strip().strip("`")
+
+        # If it's JSON, try to grab first string value of known keys
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+                # Heuristics: take first str value
+                for val in data.values():
+                    if isinstance(val, str):
+                        return val.strip()
+            except Exception:
+                pass
+
+        # If looks like GraphQL (starts with "query"/"mutation"), keep as is
+        return text
 
     async def _review_translation(
         self, *, original_query: str, graphql_query: str, model: str

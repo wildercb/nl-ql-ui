@@ -97,7 +97,7 @@
                   ></textarea>
                 </div>
                 
-                <div class="flex items-center space-x-4">
+                <div class="flex items-center space-x-4 flex-wrap">
                   <div class="flex-1">
                     <select
                       v-model="selectedModel"
@@ -123,9 +123,35 @@
                     <i v-else class="fas fa-magic"></i>
                     <span>{{ isLoading ? 'Translating...' : 'Translate' }}</span>
                   </button>
+
+                  <!-- New Multi-Agent button -->
+                  <button
+                    @click="handleMultiAgent"
+                    :disabled="isLoading || !naturalQuery.trim()"
+                    :class="[
+                      'px-8 py-3 rounded-lg font-medium transition-all duration-200 flex items-center space-x-2',
+                      isLoading || !naturalQuery.trim()
+                        ? 'bg-gray-600 cursor-not-allowed text-gray-400'
+                        : 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg hover:shadow-xl transform hover:-translate-y-0.5'
+                    ]"
+                    title="Run multi-agent pipeline"
+                  >
+                    <i v-if="isLoading" class="fas fa-spinner fa-spin"></i>
+                    <i v-else class="fas fa-project-diagram"></i>
+                    <span>{{ isLoading ? 'Processing...' : 'Multi-Agent' }}</span>
+                  </button>
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Multi-Agent Responses -->
+          <div ref="multiAgentChatRef">
+            <ChatStream
+              :messages="multiAgentMessages"
+              :loading="sseController !== null"
+              title="Multi-Agent Responses"
+            />
           </div>
 
           <!-- Translation Results -->
@@ -200,9 +226,72 @@
           </div>
         </div>
 
-        <!-- Right Panel - History & Chat -->
+        <!-- Right Panel - Multi-Agent, History & Chat -->
         <div class="space-y-6">
           
+          <!-- Unified Multi-Agent Conversation timeline (full-width) -->
+          <div ref="multiAgentSection" v-if="false" class="xl:col-span-3 bg-gradient-to-r from-purple-800 to-purple-900 rounded-2xl border border-purple-600 border-opacity-30 shadow-2xl overflow-hidden mb-8">
+            <div class="bg-gradient-to-r from-purple-600 to-purple-700 p-4">
+              <h3 class="text-lg font-bold text-white flex items-center">
+                <i class="fas fa-project-diagram mr-2"></i>
+                Multi-Agent Conversations
+                <span v-if="agentDemoResults.length" class="ml-2 bg-white bg-opacity-20 px-2 py-1 rounded-full text-xs">
+                  {{ agentDemoResults.length }}
+                </span>
+              </h3>
+            </div>
+            <div class="max-h-[70vh] overflow-y-auto divide-y divide-gray-700">
+              <div v-if="agentDemoResults.length === 0" class="p-6 text-center">
+                <i class="fas fa-robot text-4xl text-purple-600 mb-4"></i>
+                <p class="text-gray-400">Run the multi-agent pipeline to see conversations here.</p>
+              </div>
+              <div v-else>
+                <div v-for="demo in agentDemoResults" :key="demo.timestamp" class="p-6 space-y-4">
+                  <!-- Original Query -->
+                  <div class="flex items-start space-x-3">
+                    <div class="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center text-white">U</div>
+                    <div class="flex-1">
+                      <p class="font-medium text-gray-200 mb-1">Original Query</p>
+                      <p class="text-gray-300 break-words whitespace-pre-wrap">{{ demo.originalQuery }}</p>
+                    </div>
+                  </div>
+
+                  <!-- Rewritten Query -->
+                  <div class="flex items-start space-x-3">
+                    <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white">P</div>
+                    <div class="flex-1">
+                      <p class="font-medium text-gray-200 mb-1">Rewritten Query</p>
+                      <p class="text-gray-300 break-words whitespace-pre-wrap">{{ demo.rewrittenQuery }}</p>
+                    </div>
+                  </div>
+
+                  <!-- GraphQL -->
+                  <div class="flex items-start space-x-3">
+                    <div class="w-8 h-8 bg-yellow-600 rounded-full flex items-center justify-center text-white text-xs">GQL</div>
+                    <div class="flex-1 overflow-x-auto">
+                      <p class="font-medium text-gray-200 mb-1">GraphQL</p>
+                      <pre class="bg-gray-900 text-green-400 p-3 rounded whitespace-pre overflow-x-auto text-xs"><code>{{ demo.graphqlQuery }}</code></pre>
+                      <p class="text-gray-400 text-xs mt-1">Confidence: {{ (demo.confidence * 100).toFixed(1) }}%</p>
+                    </div>
+                  </div>
+
+                  <!-- Reviewer -->
+                  <div class="flex items-start space-x-3">
+                    <div class="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center text-white">R</div>
+                    <div class="flex-1">
+                      <p class="font-medium text-gray-200 mb-1">Reviewer Feedback</p>
+                      <p class="text-gray-300">Passed: <span :class="demo.reviewPassed ? 'text-green-400' : 'text-red-400'">{{ demo.reviewPassed ? 'Yes' : 'No' }}</span></p>
+                      <div v-if="demo.reviewComments.length" class="text-yellow-400 text-xs mt-1"><b>Comments:</b> {{ demo.reviewComments.join(', ') }}</div>
+                      <div v-if="demo.reviewSuggestions.length" class="text-blue-400 text-xs mt-1"><b>Suggestions:</b> {{ demo.reviewSuggestions.join(', ') }}</div>
+                    </div>
+                  </div>
+
+                  <div class="text-xs text-gray-500">Processed in {{ demo.processingTime.toFixed(2) }}s</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Query History -->
           <div class="bg-gradient-to-r from-gray-800 to-gray-900 rounded-2xl border border-green-600 border-opacity-30 shadow-2xl overflow-hidden">
             <div class="bg-gradient-to-r from-green-600 to-green-700 p-4">
@@ -355,6 +444,7 @@ import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import AuthModal from '../components/AuthModal.vue'
 import { useRouter } from 'vue-router'
+import ChatStream from '../components/ChatStream.vue'
 
 const authStore = useAuthStore()
 const { isDark, toggleTheme } = useThemeStore()
@@ -379,9 +469,13 @@ const showInteractionDetails = ref(false)
 const models = ref(['phi3:mini'])
 const selectedInteraction = ref<any>(null)
 const isLoadingHistory = ref(false)
+const multiAgentSection = ref<HTMLElement | null>(null)
+const multiAgentChatRef = ref<HTMLElement | null>(null)
+const multiAgentMessages = ref<any[]>([])
 
 // Translation results
 const translationResults = ref([])
+const agentDemoResults = ref([])
 
 // User history and stats
 const userHistory = ref([])
@@ -543,6 +637,95 @@ const handleTranslate = async () => {
     isLoading.value = false;
   }
 };
+
+// SSE controller for multi-agent streaming
+const sseController = ref<EventSource | null>(null)
+
+const handleMultiAgent = () => {
+  if (!naturalQuery.value.trim()) return
+
+  // Reset message list and add the user's query as the opening message
+  multiAgentMessages.value = [{
+    role: 'user',
+    agent: 'User',
+    content: naturalQuery.value,
+    timestamp: new Date().toLocaleTimeString()
+  }]
+
+  // Close previous stream if running
+  if (sseController.value) {
+    sseController.value.close()
+    sseController.value = null
+  }
+
+  const startTime = Date.now()
+  const placeholder: any = {
+    originalQuery: naturalQuery.value,
+    rewrittenQuery: '',
+    graphqlQuery: '',
+    confidence: 0,
+    reviewPassed: false,
+    reviewComments: [],
+    reviewSuggestions: [],
+    processingTime: 0,
+    timestamp: new Date().toLocaleTimeString(),
+    model: selectedModel.value || 'default'
+  }
+  agentDemoResults.value.unshift(placeholder)
+
+  // Build streaming URL
+  const qs = new URLSearchParams({
+    natural_query: naturalQuery.value,
+    translator_model: selectedModel.value
+  })
+  const es = new EventSource(`/api/agent-demo/stream?${qs.toString()}`)
+  sseController.value = es
+
+  const applyPayload = (type: string, payload: any) => {
+    const ts = new Date().toLocaleTimeString()
+    if (type === 'rewrite') {
+      placeholder.rewrittenQuery = payload.rewritten_query
+      multiAgentMessages.value.push({ role: 'agent', agent: 'Rewriter', content: payload.rewritten_query, timestamp: ts })
+    } else if (type === 'graphql') {
+      placeholder.graphqlQuery = payload.graphql_query
+      placeholder.confidence = payload.confidence
+      multiAgentMessages.value.push({ role: 'agent', agent: 'Translator', content: payload.graphql_query, timestamp: ts })
+    } else if (type === 'review') {
+      placeholder.reviewPassed = payload.passed
+      placeholder.reviewComments = payload.comments
+      placeholder.reviewSuggestions = payload.suggestions
+      placeholder.processingTime = (Date.now() - startTime) / 1000
+      multiAgentMessages.value.push({
+        role: 'agent',
+        agent: 'Reviewer',
+        content: `Passed: ${payload.passed ? 'Yes' : 'No'}\nComments: ${payload.comments.join(', ')}\nSuggestions: ${payload.suggestions.join(', ')}`,
+        timestamp: ts
+      })
+    }
+  }
+
+  es.addEventListener('rewrite', (e: MessageEvent) => applyPayload('rewrite', JSON.parse(e.data)))
+  es.addEventListener('graphql', (e: MessageEvent) => applyPayload('graphql', JSON.parse(e.data)))
+  es.addEventListener('review', (e: MessageEvent) => applyPayload('review', JSON.parse(e.data)))
+  es.addEventListener('complete', () => {
+    placeholder.processingTime = (Date.now() - startTime) / 1000
+    es.close()
+    sseController.value = null
+    multiAgentMessages.value.push({ role: 'agent', agent: 'System', content: 'Multi-agent processing complete.', timestamp: new Date().toLocaleTimeString() })
+  })
+
+  es.addEventListener('error', (e: MessageEvent) => {
+    console.error('Multi-agent SSE error', e)
+    placeholder.graphqlQuery = 'Error during streaming.'
+    es.close()
+    sseController.value = null
+  })
+
+  // Scroll to view
+  nextTick(() => {
+    multiAgentChatRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
 
 const handleSignIn = () => {
   showAuthModal.value = true

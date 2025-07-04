@@ -5,7 +5,11 @@ import time
 from sse_starlette.sse import EventSourceResponse
 from typing import List, Dict, Any, Optional
 
-from services.llm_tracking_service import get_tracking_service, LLMTrackingService
+from services.llm_tracking_service import (
+    get_tracking_service,
+    LLMTrackingService,
+    track_interaction as save_interaction,
+)
 from models.query import LLMInteraction
 
 router = APIRouter(prefix='/api', tags=['interactions'])
@@ -111,14 +115,16 @@ async def broadcast_interaction(
     if len(live_interactions_store) > 50:
         live_interactions_store.pop(0)
     
-    # Save to tracking service
+    # Persist the interaction for analytics (non-blocking)
     try:
-        await tracking_service.track_interaction(
-            model=enhanced_interaction['model'],
-            prompt_text=enhanced_interaction['prompt_data']['full_prompt'],
-            response_text=enhanced_interaction['response_data']['raw_response'],
-            processing_time_ms=enhanced_interaction['processing_time'] * 1000,
-            metadata=enhanced_interaction
+        await save_interaction(
+            agent=enhanced_interaction['model'],
+            message=(
+                enhanced_interaction['prompt_data']['full_prompt']
+                + "\n\n---\n\n"
+                + enhanced_interaction['response_data']['raw_response']
+            ),
+            interaction_id=str(enhanced_interaction['id'])
         )
     except Exception as e:
         print(f"Error saving interaction to tracking service: {e}")
