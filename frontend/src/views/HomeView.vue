@@ -2,14 +2,14 @@
   <div class="flex flex-col h-screen bg-gray-900 text-white">
     <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 overflow-hidden">
       <!-- Left Column: NL Query Input + Agent Stream -->
-      <div class="flex flex-col h-full space-y-4">
-        <!-- NL Query Input (same size as chat) -->
-        <div class="flex-1 flex flex-col">
+      <div class="flex flex-col h-full">
+        <!-- NL Query Input (fixed height) -->
+        <div class="flex-none">
           <textarea
             v-model="naturalQuery"
             @keyup.enter="runPipeline('standard')"
             :disabled="isProcessing"
-            class="w-full h-full resize-none p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
+            class="w-full resize-none p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
             placeholder="Enter your natural language query here..."
           ></textarea>
           <div class="flex space-x-2 mt-2 items-center">
@@ -24,13 +24,15 @@
             </button>
             <select v-model="selectedModel" class="ml-4 p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
               <option value="phi3:mini">phi3:mini</option>
-              <option value="gemma3:4b">gemma3:4b</option>
-              <option value="llama4:16x17b">llama4:16x17b</option>
+              <option value="gemma3n:e2b">gemma3n:e2b</option>
+              <option value="gemma3n:e4b">gemma3n:e4b</option>
+              <option value="gemma:7b">gemma:7b</option>
+              <option value="llama3:8b">llama3:8b</option>
             </select>
           </div>
         </div>
-        <!-- Agent Stream Chat -->
-        <div class="flex-1 flex flex-col overflow-hidden">
+        <!-- Agent Stream Chat (fills remaining space, scrollable) -->
+        <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
           <ChatStream 
             :messages="chatMessages" 
             :loading="isProcessing" 
