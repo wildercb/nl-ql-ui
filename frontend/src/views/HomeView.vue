@@ -1,59 +1,36 @@
 <template>
-  <div class="flex h-screen bg-gray-900 text-white">
-    <!-- Sidebar -->
-    <div class="w-64 bg-gray-800 p-4 flex flex-col">
-      <h1 class="text-2xl font-bold mb-4">MPPW-MCP</h1>
-      <nav class="flex flex-col space-y-2">
-        <router-link to="/" class="text-gray-300 hover:text-white"><i class="fas fa-home mr-2"></i>Home</router-link>
-        <router-link to="/history" class="text-gray-300 hover:text-white"><i class="fas fa-history mr-2"></i>History</router-link>
-        <router-link to="/docs" class="text-gray-300 hover:text-white"><i class="fas fa-book mr-2"></i>Docs</router-link>
-      </nav>
-      <div class="mt-auto">
-        <div v-if="authStore.isAuthenticated" class="flex items-center">
-          <span class="text-sm">Welcome, {{ authStore.isGuest ? 'Guest' : authStore.currentUser?.email }}</span>
-          <button @click="handleLogout" class="ml-auto text-red-400 hover:text-red-300">
-            <i class="fas fa-sign-out-alt"></i>
-          </button>
+  <div class="flex flex-col h-screen bg-gray-900 text-white">
+    <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 overflow-hidden">
+      <!-- Left Column: NL Query Input + Agent Stream -->
+      <div class="flex flex-col h-full space-y-4">
+        <!-- NL Query Input (same size as chat) -->
+        <div class="flex-1 flex flex-col">
+          <textarea
+            v-model="naturalQuery"
+            @keyup.enter="runPipeline('standard')"
+            :disabled="isProcessing"
+            class="w-full h-full resize-none p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
+            placeholder="Enter your natural language query here..."
+          ></textarea>
+          <div class="flex space-x-2 mt-2 items-center">
+            <button @click="runPipeline('fast')" :disabled="isProcessing" class="btn-primary">
+              <i class="fas fa-bolt mr-2"></i> Translate
+            </button>
+            <button @click="runPipeline('standard')" :disabled="isProcessing" class="btn-primary">
+              <i class="fas fa-users-cog mr-2"></i> Multi-Agent
+            </button>
+            <button @click="runPipeline('comprehensive')" :disabled="isProcessing" class="btn-primary">
+              <i class="fas fa-rocket mr-2"></i> Enhanced Agents
+            </button>
+            <select v-model="selectedModel" class="ml-4 p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
+              <option value="phi3:mini">phi3:mini</option>
+              <option value="gemma3:4b">gemma3:4b</option>
+              <option value="llama4:16x17b">llama4:16x17b</option>
+            </select>
+          </div>
         </div>
-        <button v-else @click="handleSignIn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
-          Sign In
-        </button>
-      </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="flex-1 flex flex-col p-6 overflow-hidden">
-      <!-- Input Area -->
-      <div class="mb-4">
-        <textarea
-          v-model="naturalQuery"
-          @keyup.enter="runPipeline('standard')"
-          :disabled="isProcessing"
-          class="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-          placeholder="Enter your natural language query here..."
-        ></textarea>
-        <div class="flex space-x-2 mt-2 items-center">
-          <button @click="runPipeline('fast')" :disabled="isProcessing" class="btn-primary">
-            <i class="fas fa-bolt mr-2"></i> Translate
-          </button>
-          <button @click="runPipeline('standard')" :disabled="isProcessing" class="btn-primary">
-            <i class="fas fa-users-cog mr-2"></i> Multi-Agent
-          </button>
-          <button @click="runPipeline('comprehensive')" :disabled="isProcessing" class="btn-primary">
-            <i class="fas fa-rocket mr-2"></i> Enhanced Agents
-          </button>
-          <select v-model="selectedModel" class="ml-4 p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
-            <option value="phi3:mini">phi3:mini</option>
-            <option value="gemma3:4b">gemma3:4b</option>
-            <option value="llama4:16x17b">llama4:16x17b</option>
-          </select>
-        </div>
-      </div>
-
-      <!-- Results Area -->
-      <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-hidden">
-        <!-- Left Panel: Chat Stream -->
-        <div class="flex flex-col overflow-hidden">
+        <!-- Agent Stream Chat -->
+        <div class="flex-1 flex flex-col overflow-hidden">
           <ChatStream 
             :messages="chatMessages" 
             :loading="isProcessing" 
@@ -62,16 +39,20 @@
             @sendMessage="handleChatMessage"
           />
         </div>
+      </div>
 
-        <!-- Right Panel: GraphQL and Data -->
-        <div class="flex flex-col space-y-6 overflow-hidden">
+      <!-- Right Column: GraphQL Query + Results -->
+      <div class="flex flex-col h-full space-y-4">
+        <!-- GraphQL Query Box -->
+        <div class="flex-1 flex flex-col">
           <GraphQLQueryBox :query="finalGraphQLQuery" @send="runDataQuery" />
+        </div>
+        <!-- Results -->
+        <div class="flex-1 flex flex-col">
           <DataResults :results="dataQueryResults" :loading="isDataLoading" />
         </div>
       </div>
     </div>
-
-    <AuthModal :show="showAuthModal" @close="showAuthModal = false" @authenticated="onAuthenticated" @guest="onGuestSession" />
   </div>
 </template>
 
@@ -80,7 +61,6 @@ import { ref, onMounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useHistoryStore } from '../stores/history';
-import AuthModal from '../components/AuthModal.vue';
 import ChatStream from '../components/ChatStream.vue';
 import GraphQLQueryBox from '../components/GraphQLQueryBox.vue';
 import DataResults from '../components/DataResults.vue';
@@ -96,7 +76,6 @@ const selectedModel = ref('phi3:mini');
 const naturalQuery = ref('');
 const chatMessages = ref<any[]>([]);
 const isProcessing = ref(false);
-const showAuthModal = ref(false);
 
 const finalGraphQLQuery = ref('');
 const isDataLoading = ref(false);
@@ -473,11 +452,7 @@ const runDataQuery = async () => {
     }
 }
 
-// Auth Handlers
-const handleSignIn = () => { showAuthModal.value = true; };
-const handleLogout = () => { authStore.logout(); router.push('/'); };
-const onAuthenticated = (authData: any) => { authStore.setAuthenticated(authData); showAuthModal.value = false; };
-const onGuestSession = (sessionData: any) => { authStore.setGuestSession(sessionData); showAuthModal.value = false; };
+// Auth is now handled globally in App.vue
 
 // Lifecycle
 onMounted(() => {

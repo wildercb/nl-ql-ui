@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+  <div class="flex-1 bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
     <div class="text-center">
       <h1 class="text-6xl font-bold text-gray-900 dark:text-white mb-4">
         404
