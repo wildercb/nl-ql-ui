@@ -13,9 +13,13 @@
       </button>
     </div>
 
-    <pre class="p-4 text-xs whitespace-pre break-words max-h-60 overflow-y-auto custom-scrollbar text-gray-800 dark:text-gray-100">
-{{ displayQuery }}
-    </pre>
+    <!-- Editable GraphQL query box -->
+    <textarea
+      v-model="editableQuery"
+      @input="updateParent"
+      rows="10"
+      class="w-full p-4 text-xs font-mono bg-transparent whitespace-pre-wrap break-words custom-scrollbar outline-none resize-y text-gray-800 dark:text-gray-100"
+    ></textarea>
     <div v-if="formatError" class="text-xs text-red-400 p-2 bg-red-500/10 border-t border-red-400/20">
       <strong>Formatting Error:</strong> {{ formatError }}
     </div>
@@ -23,12 +27,12 @@
 </template>
 
 <script setup lang="ts">
-import { defineProps, ref, watch, computed } from 'vue'
+import { defineProps, ref, watch } from 'vue'
 import prettier from 'prettier/standalone'
 import parserGraphql from 'prettier/plugins/graphql'
 
 const props = defineProps<{ query: string }>()
-const formattedQuery = ref('')
+const editableQuery = ref(props.query)
 const isFormatting = ref(false)
 const formatError = ref<string | boolean>(false)
 
@@ -47,7 +51,7 @@ const normalizeGql = (query: string): string => {
 
 const formatQuery = async (query: string) => {
   if (!query?.trim()) {
-    formattedQuery.value = 'Waiting for translation…'
+    editableQuery.value = 'Waiting for translation…'
     formatError.value = false
     return
   }
@@ -55,25 +59,39 @@ const formatQuery = async (query: string) => {
   formatError.value = false
   try {
     const normalizedQuery = normalizeGql(query)
-    formattedQuery.value = await prettier.format(normalizedQuery, {
+    editableQuery.value = await prettier.format(normalizedQuery, {
       parser: 'graphql',
       plugins: [parserGraphql],
       printWidth: 80
     })
   } catch (e: any) {
     console.error('GraphQL Formatting Error:', e)
-    formattedQuery.value = query // Fallback to raw query
+    editableQuery.value = query // Fallback to raw query
     formatError.value = e.message || 'An unknown error occurred during formatting.'
   } finally {
     isFormatting.value = false
   }
 }
 
-watch(() => props.query, (newQuery) => {
-  formatQuery(newQuery)
-}, { immediate: true })
+// When parent provides a new query (from translator), prettify it and update the editor
+watch(
+  () => props.query,
+  (newQuery) => {
+    // avoid overwriting if the user is currently editing (simple heuristic)
+    if (newQuery !== editableQuery.value) {
+      formatQuery(newQuery)
+    }
+  },
+  { immediate: true }
+)
 
-const displayQuery = computed(() => isFormatting.value ? 'Formatting…' : formattedQuery.value)
+// helper to emit change to parent
+const updateParent = () => {
+  // debounce optional, but fine for now
+  emit('update:query', editableQuery.value)
+}
+
+const emit = defineEmits<{ 'update:query': [string]; send: [] }>()
 </script>
 
 <style scoped>

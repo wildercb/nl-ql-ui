@@ -53,24 +53,34 @@ class DataQueryService:
 
     # ----------------------------- Parsing ---------------------------------
 
-    # Match queries that look like:
-    #   query { collectionName(limit: 10) { fieldA fieldB } }
-    # The pattern is intentionally *simple* – it does **not** support nested
-    # selections or aliases.  It extracts the collection name, an optional
-    # numeric limit, and the list of space-separated field names.
+    # Match very simple GraphQL queries while *ignoring* any non-limit
+    # arguments (e.g. `filter: { ... }`).  Supported pattern examples:
+    #   query { collection(limit: 5) { fieldA fieldB } }
+    #   query { collection(filter: { x: 1 }, limit: 10) { fieldA } }
+    #   query { collection { fieldA fieldB } }
+    #
+    # We only extract:
+    #   * collection name
+    #   * limit (if provided, defaults to 20, capped at 100)
+    #   * list of scalar fields inside the innermost braces
+    #
+    # The regex purposefully does *not* try to fully parse GraphQL – it
+    # just grabs enough to turn the request into a `find` projection.
     _PATTERN = re.compile(
-        r"query\s*"                 # literal 'query' keyword
+        r"query\s*"                 # literal 'query'
         r"\{\s*"                  # opening brace
         r"(?P<col>\w+)"           # collection name
         r"\s*"                    # optional whitespace
-        r"(?:"                     # --- optional '(limit: N)' ---
-            r"\(\s*limit\s*:\s*(?P<limit>\d+)\s*\)"  # capture limit
-        r")?"                      # --- end optional ---
+        r"(?:"                     # optional argument list eg. (limit: 10, filter: {...})
+            r"\("                  # opening paren
+            r"(?P<args>[^)]*)"     # anything inside
+            r"\)"                  # closing paren
+        r")?"                      # end optional args
         r"\s*"                    # optional whitespace
         r"\{\s*"                 # opening brace for field list
-        r"(?P<fields>[^}]+?)"      # everything up to the next '}' (non-greedy)
-        r"\s*\}\s*"             # closing brace for field list
-        r"\}\s*"                 # closing brace for entire query
+        r"(?P<fields>[^}]+?)"      # capture until next }
+        r"\s*\}\s*"             # close field list
+        r"\}\s*"                 # close whole query
         , re.S
     )
 
@@ -80,7 +90,10 @@ class DataQueryService:
         if not match:
             raise ValueError("Unsupported query pattern")
         collection = match.group("col")
-        limit = int(match.group("limit") or 20)
+        args = match.group("args") or ""
+        # crude search for limit: NUMBER inside args
+        limit_match = re.search(r"limit\s*:\s*(\d+)", args)
+        limit = int(limit_match.group(1)) if limit_match else 20
         limit = max(1, min(limit, 100))
         raw_fields = match.group("fields")
         projection = [f.strip() for f in raw_fields.split() if f.strip()]

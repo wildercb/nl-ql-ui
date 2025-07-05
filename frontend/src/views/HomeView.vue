@@ -1,8 +1,8 @@
 <template>
   <div class="flex flex-col h-screen bg-gray-900 text-white">
-    <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 overflow-hidden">
+    <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 overflow-hidden">
       <!-- Left Column: NL Query Input + Agent Stream -->
-      <div class="flex flex-col h-full">
+      <div class="flex flex-col h-full min-h-0">
         <!-- NL Query Input (fixed height) -->
         <div class="flex-none">
           <textarea
@@ -32,7 +32,7 @@
           </div>
         </div>
         <!-- Agent Stream Chat (fills remaining space, scrollable) -->
-        <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div class="flex-1 min-h-0">
           <ChatStream 
             :messages="chatMessages" 
             :loading="isProcessing" 
@@ -44,13 +44,13 @@
       </div>
 
       <!-- Right Column: GraphQL Query + Results -->
-      <div class="flex flex-col h-full space-y-4">
+      <div class="flex flex-col h-full min-h-0 space-y-0">
         <!-- GraphQL Query Box -->
-        <div class="flex-1 flex flex-col">
-          <GraphQLQueryBox :query="finalGraphQLQuery" @send="runDataQuery" />
+        <div class="flex-none">
+          <GraphQLQueryBox :query="finalGraphQLQuery" @update:query="finalGraphQLQuery = $event" @send="runDataQuery" />
         </div>
         <!-- Results -->
-        <div class="flex-1 flex flex-col">
+        <div class="flex-1 flex flex-col min-h-0">
           <DataResults :results="dataQueryResults" :loading="isDataLoading" />
         </div>
       </div>
@@ -438,14 +438,14 @@ const runDataQuery = async () => {
         const response = await fetch('/api/data/query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: finalGraphQLQuery.value }),
+            body: JSON.stringify({ graphql_query: finalGraphQLQuery.value }),
         });
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || 'Failed to fetch data');
         }
         const results = await response.json();
-        dataQueryResults.value = results.data;
+        dataQueryResults.value = results.results || [];
     } catch (error) {
         console.error('Data query error:', error);
         dataQueryResults.value = [{ error: String(error) }];

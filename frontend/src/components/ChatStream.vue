@@ -1,28 +1,36 @@
 <template>
-  <div class="h-full flex flex-col">
-    <div ref="scrollArea" class="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+  <div class="h-full flex flex-col bg-gray-800 rounded-lg border border-gray-700">
+    <!-- Header -->
+    <div class="px-4 py-2 border-b border-gray-700">
+      <h3 class="text-md font-semibold text-gray-200">{{ title || 'Agent Stream' }}</h3>
+    </div>
+    
+    <!-- Messages -->
+    <div ref="scrollArea" class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 custom-scrollbar">
       <div v-if="messages.length === 0" class="text-center text-gray-400 pt-8">
         <i class="fas fa-comments text-4xl mb-2"></i>
         <p class="font-semibold">{{ title }}</p>
         <p class="text-sm">Enter a query below to start the conversation.</p>
       </div>
 
-      <div v-for="(msg, index) in messages" :key="index" :class="messageClass(msg)">
-        <div v-if="msg.role === 'user'" class="flex items-end justify-end">
-          <div class="bg-blue-600 text-white p-3 rounded-lg max-w-lg shadow-md">
-            <p v-html="renderMarkdown(msg.content)"></p>
+      <div v-for="(msg, index) in messages" :key="index" class="w-full">
+        <!-- User Message -->
+        <div v-if="msg.role === 'user'" class="flex items-end justify-end w-full">
+          <div class="bg-blue-600 text-white p-3 rounded-lg w-full shadow-md break-words">
+            <p class="whitespace-pre-wrap" v-html="renderMarkdown(msg.content)"></p>
             <div class="text-right text-xs text-blue-200 mt-1">{{ msg.timestamp }}</div>
           </div>
           <div class="w-8 h-8 ml-2 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">U</div>
         </div>
 
-        <div v-else class="flex items-start">
+        <!-- Agent / Assistant Message -->
+        <div v-else class="flex items-start w-full mt-2">
           <div class="w-8 h-8 mr-2 rounded-full bg-gray-700 text-white flex items-center justify-center">
-            <i :class="getAgentIcon(msg.agent)"></i>
+            <i :class="getAgentIcon(msg.agent)" />
           </div>
-          <div class="bg-gray-700 p-3 rounded-lg max-w-lg shadow-md">
-            <p class="font-bold text-purple-400 text-sm capitalize">{{ msg.agent }}</p>
-            <div class="text-white prose prose-sm max-w-none" v-html="renderMarkdown(msg.content)"></div>
+          <div class="bg-gray-700 p-3 rounded-lg w-full shadow-md break-words">
+            <p class="font-bold text-purple-400 text-sm capitalize mb-1">{{ msg.agent }}</p>
+            <div class="text-white prose prose-sm max-w-none" v-html="renderMarkdown(msg.content)" />
             <div v-if="msg.isStreaming" class="typing-indicator">
               <span></span><span></span><span></span>
             </div>

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from typing import Any, List, Dict
 
-from services.cypher_query_service import get_cypher_service, CypherQueryService
+from services.data_query_service import get_data_query_service, DataQueryService
 
 router = APIRouter(prefix="/api", tags=["Data Query"])
 
@@ -20,7 +20,7 @@ class DataQueryResponse(BaseModel):
 @router.post("/data/query", response_model=DataQueryResponse)
 async def run_data_query(
     payload: DataQueryRequest,
-    service: CypherQueryService = Depends(get_cypher_service),
+    service: DataQueryService = Depends(get_data_query_service),
 ):
     """Run the provided GraphQL query against the content database and return JSON results."""
     try:
