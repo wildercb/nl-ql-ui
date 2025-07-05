@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col bg-gray-800 rounded-lg border border-gray-700">
+  <div class="h-full flex flex-col bg-gray-800 rounded-none border border-gray-700">
     <!-- Header -->
     <div class="px-4 py-2 border-b border-gray-700">
       <h3 class="text-md font-semibold text-gray-200">{{ title || 'Agent Stream' }}</h3>

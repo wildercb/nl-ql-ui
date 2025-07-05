@@ -33,6 +33,15 @@ _DEMO_DOCS: Dict[str, List[Dict[str, Any]]] = {
             "operatorID": "op_17",
             "timestamp": "2024-06-20T09:11:00Z",
         },
+        {
+            "logID": 3,
+            "equipmentID": "printer_XYZ",
+            "notes": "Uneven powder spreading captured on video; operator planning blade replacement.",
+            "operatorID": "op_55",
+            "timestamp": "2024-06-25T10:45:00Z",
+            "imageUrl": "https://picsum.photos/seed/anomaly3/400/250",
+            "videoUrl": "https://samplelib.com/lib/preview/mp4/sample-5s.mp4",
+        },
     ],
     "thermalScans": [
         {
@@ -138,13 +147,23 @@ class ContentSeedService:
             self._db = self._client[settings.data_database.database]
         return self._db
 
-    async def seed_once(self) -> dict[str, int]:
-        """Insert docs only if their collection is empty. Returns insert counts per collection."""
+    async def seed_once(self, force: bool = False) -> dict[str, int]:
+        """Insert demo docs.
+
+        If *force* is False (default) we only insert into an empty collection.  If *force* is True
+        we first delete all existing documents, then insert fresh copies so media additions are
+        visible without manual cleanup.
+        Returns a mapping of collection → inserted_count.
+        """
         db = await self._get_db()
         inserted: dict[str, int] = {}
         for coll_name, docs in _DEMO_DOCS.items():
             coll = db[coll_name]
             count = await coll.count_documents({})
+            if force and count:
+                await coll.delete_many({})
+                count = 0
+
             if count == 0:
                 result = await coll.insert_many(docs)
                 inserted[coll_name] = len(result.inserted_ids)

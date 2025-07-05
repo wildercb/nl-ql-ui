@@ -1,5 +1,5 @@
 <template>
-  <div class="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
+  <div class="rounded-none border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
     <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
       <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
         <i class="fas fa-database mr-2 text-green-600"></i> Results
@@ -27,14 +27,24 @@
         </pre>
         <!-- If doc contains media urls show thumbnails -->
         <div v-if="mediaUrls(doc).length" class="flex flex-wrap gap-3 mt-2">
-          <component
+          <a
             v-for="(m, i) in mediaUrls(doc)"
             :key="i"
-            :is="m.type === 'image' ? 'img' : 'video'"
-            :src="m.url"
-            class="max-h-40 rounded shadow"
-            v-bind="m.type === 'video' ? { controls: true } : {}"
-          />
+            :href="m.url"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="group relative"
+          >
+            <component
+              :is="m.type === 'image' ? 'img' : 'video'"
+              :src="m.url"
+              class="max-h-40 rounded shadow object-cover"
+              v-bind="m.type === 'video' ? { controls: true } : {}"
+            />
+            <span class="absolute bottom-1 right-1 text-[10px] bg-black/60 text-white px-1 rounded opacity-0 group-hover:opacity-100">
+              {{ m.type }}
+            </span>
+          </a>
         </div>
       </div>
     </div>
@@ -52,18 +62,26 @@ const props = defineProps<{ results: Doc[]; loading: boolean }>()
 
 const formatted = (doc: Doc) => JSON.stringify(doc, null, 2)
 
-// naive media detection
+// 🔍 Enhanced (recursive) media detection – walks nested objects/arrays.
 const mediaUrls = (doc: Doc) => {
   const urls: { url: string; type: 'image' | 'video' }[] = []
-  Object.values(doc).forEach((val) => {
-    if (typeof val === 'string') {
-      if (val.match(/\.(png|jpe?g|gif|webp)$/i)) {
-        urls.push({ url: val, type: 'image' })
-      } else if (val.match(/\.(mp4|webm|ogg)$/i)) {
-        urls.push({ url: val, type: 'video' })
+
+  const visit = (value: any) => {
+    if (!value) return
+    if (typeof value === 'string') {
+      if (value.match(/\.(png|jpe?g|gif|webp)$/i)) {
+        urls.push({ url: value, type: 'image' })
+      } else if (value.match(/\.(mp4|webm|ogg)$/i)) {
+        urls.push({ url: value, type: 'video' })
       }
+    } else if (Array.isArray(value)) {
+      value.forEach(visit)
+    } else if (typeof value === 'object') {
+      Object.values(value).forEach(visit)
     }
-  })
+  }
+
+  visit(doc)
   return urls
 }
 </script>

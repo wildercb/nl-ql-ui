@@ -35,6 +35,15 @@ safeInsertMany("maintenanceLogs", [
     notes: "Routine check – no issues.",
     operatorID: "op_17",
     timestamp: ISODate("2024-06-20T09:11:00Z")
+  },
+  {
+    logID: 3,
+    equipmentID: "printer_XYZ",
+    notes: "Uneven powder spreading captured on video; operator planning blade replacement.",
+    operatorID: "op_55",
+    timestamp: ISODate("2024-06-25T10:45:00Z"),
+    imageUrl: "https://picsum.photos/seed/anomaly3/400/250",
+    videoUrl: "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
   }
 ]);
 

@@ -39,6 +39,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Documentation' }
   },
   {
+    path: '/prompt-guide',
+    name: 'PromptGuide',
+    component: () => import('@/views/PromptGuideView.vue'),
+    meta: { title: 'Prompt Engineering Guide' }
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'NotFound',
     component: () => import('@/views/NotFoundView.vue'),

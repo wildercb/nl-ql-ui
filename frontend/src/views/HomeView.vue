@@ -2,17 +2,18 @@
   <div class="flex flex-col h-screen bg-gray-900 text-white">
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 overflow-hidden">
       <!-- Left Column: NL Query Input + Agent Stream -->
-      <div class="flex flex-col h-full min-h-0">
+      <div class="flex flex-col h-full min-h-0 border border-gray-700 rounded-none p-4">
+        <h2 class="text-lg font-semibold text-gray-200 mb-2">Enter Natural Language Query Here</h2>
         <!-- NL Query Input (fixed height) -->
         <div class="flex-none">
           <textarea
             v-model="naturalQuery"
             @keyup.enter="runPipeline('standard')"
             :disabled="isProcessing"
-            class="w-full resize-none p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
+            class="w-full resize-none p-3 bg-gray-700 rounded-none focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
             placeholder="Enter your natural language query here..."
           ></textarea>
-          <div class="flex space-x-2 mt-2 items-center">
+          <div class="flex flex-wrap justify-center items-center gap-2 mt-2">
             <button @click="runPipeline('fast')" :disabled="isProcessing" class="btn-primary">
               <i class="fas fa-bolt mr-2"></i> Translate
             </button>
@@ -22,7 +23,7 @@
             <button @click="runPipeline('comprehensive')" :disabled="isProcessing" class="btn-primary">
               <i class="fas fa-rocket mr-2"></i> Enhanced Agents
             </button>
-            <select v-model="selectedModel" class="ml-4 p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
+            <select v-model="selectedModel" class="p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
               <option value="phi3:mini">phi3:mini</option>
               <option value="gemma3n:e2b">gemma3n:e2b</option>
               <option value="gemma3n:e4b">gemma3n:e4b</option>
@@ -44,7 +45,8 @@
       </div>
 
       <!-- Right Column: GraphQL Query + Results -->
-      <div class="flex flex-col h-full min-h-0 space-y-0">
+      <div class="flex flex-col h-full min-h-0 space-y-0 border border-gray-700 rounded-none p-4">
+        <h2 class="text-lg font-semibold text-gray-200 mb-2">Get Results Here</h2>
         <!-- GraphQL Query Box -->
         <div class="flex-none">
           <GraphQLQueryBox :query="finalGraphQLQuery" @update:query="finalGraphQLQuery = $event" @send="runDataQuery" />
@@ -228,6 +230,14 @@ const handleStreamEvent = (event: any) => {
           if (data.result && data.result.suggested_query) {
             console.log('📝 Reviewer suggested new GraphQL query:', data.result.suggested_query);
             finalGraphQLQuery.value = data.result.suggested_query;
+
+            // Automatically execute the newly suggested query so results stream in live
+            try {
+              // Fire and forget – we don't need to await here
+              runDataQuery();
+            } catch (e) {
+              console.error('Failed to auto-run data query:', e);
+            }
           }
         } else if (data.agent === 'rewriter') {
           agentMessage.content = data.result?.rewritten_query || '';

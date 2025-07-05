@@ -378,7 +378,10 @@ class EnhancedOrchestrationService:
         logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': 'translator', 'result': final_translation, 'prompt': prompt_messages}}
         
-        graphql_query_for_review = final_translation.get('graphql_query', '')
+        if isinstance(final_translation, dict):
+            graphql_query_for_review = final_translation.get('graphql_query', '')
+        else:
+            graphql_query_for_review = ''
 
         # Step 3: Review
         agent_name = 'reviewer'
@@ -390,6 +393,16 @@ class EnhancedOrchestrationService:
             graphql_query_for_review,
             review_model
         )
+
+        # If reviewer proposes a corrected GraphQL query, adopt it for downstream
+        if isinstance(review_result, dict) and review_result.get('suggested_query'):
+            corrected_query = review_result['suggested_query']
+            logger.info(f"🔄 [{context['request_id']}] Reviewer suggested replacement GraphQL query; adopting it.")
+            if isinstance(final_translation, dict):
+                final_translation['graphql_query'] = corrected_query
+                # Update confidence to reflect review approval if necessary
+                final_translation['confidence'] = max(final_translation.get('confidence', 0.0), 0.9)
+
         logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': agent_name, 'result': review_result, 'prompt': review_prompt}}
         
@@ -646,7 +659,8 @@ Respond in valid JSON format:
   "comments": ["specific feedback points"],
   "suggested_improvements": ["concrete improvement suggestions"],
   "security_concerns": ["any security issues found"],
-  "performance_score": 1-10
+  "performance_score": 1-10,
+  "suggested_query": "(optional, corrected GraphQL query if you recommend changes)"
 }"""
         
         user_prompt = f"""Please review this GraphQL translation:
@@ -674,11 +688,16 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
             # Extract JSON from the response text
             review_json = self._extract_json(result.text)
             
-            # Add validation for expected keys
+            # Ensure we capture any suggested GraphQL replacement if provided
             required_keys = ['passed', 'comments', 'suggested_improvements', 'security_concerns', 'performance_score']
+            
             if not all(key in review_json for key in required_keys):
                 logger.warning("Review response missing required keys, using heuristic parsing")
                 return messages, self._heuristic_parse_review(result.text)
+
+            # Normalise \'suggested_query\' so downstream code can rely on it
+            if 'suggested_query' not in review_json:
+                review_json['suggested_query'] = None
 
             return messages, review_json
 
@@ -687,32 +706,57 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
             return messages, self._heuristic_parse_review(str(e))
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
-        """Extract JSON object from a string, even if it's embedded in other text."""
-        try:
-            # Find the start of the JSON object
-            json_start = text.find('{')
-            if json_start == -1:
-                return {}
+        """Extract JSON object from arbitrary LLM text.
 
-            # Find the end of the JSON object by balancing braces
-            brace_count = 0
-            json_end = -1
-            for i, char in enumerate(text[json_start:]):
-                if char == '{':
+        1. Strips code-fence markers (```json ... ```)
+        2. Balances braces while ignoring those inside quoted strings so
+           embedded GraphQL braces don't break matching.
+        """
+        # Remove common markdown code-fence wrappers
+        cleaned = (
+            text.replace("```json", "")
+                .replace("```JSON", "")
+                .replace("```", "")
+        ).strip()
+
+        start = cleaned.find('{')
+        if start == -1:
+            return {}
+
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        end = -1
+
+        for idx, ch in enumerate(cleaned[start:]):
+            if escape_next:
+                escape_next = False
+                continue
+
+            if ch == '\\':
+                escape_next = True
+                continue
+
+            if ch == '"':
+                in_string = not in_string
+                continue
+
+            if not in_string:
+                if ch == '{':
                     brace_count += 1
-                elif char == '}':
+                elif ch == '}':
                     brace_count -= 1
                     if brace_count == 0:
-                        json_end = json_start + i + 1
+                        end = start + idx + 1
                         break
-            
-            if json_end == -1:
-                return {}
 
-            # Extract and parse the JSON string
-            json_str = text[json_start:json_end]
+        if end == -1:
+            return {}
+
+        json_str = cleaned[start:end]
+        try:
             return json.loads(json_str)
-        except (json.JSONDecodeError, IndexError):
+        except json.JSONDecodeError:
             return {}
 
     def _heuristic_parse_review(self, review_text: str) -> Dict[str, Any]:
@@ -729,15 +773,35 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
         passed = positive_score > negative_score
         
         # Extract meaningful lines as comments
-        lines = [line.strip() for line in review_text.split('\\n') if line.strip()]
+        lines = [line.strip() for line in review_text.split('\n') if line.strip()]
         comments = lines[:3]  # Take first 3 non-empty lines
+        
+        # Attempt to extract a suggested GraphQL query between the first opening brace
+        # and its matching closing brace if it appears to be GraphQL (heuristic)
+        suggested_query = None
+        brace_idx = review_text.find('{')
+        if brace_idx != -1:
+            depth = 0
+            for jdx, ch in enumerate(review_text[brace_idx:]):
+                if ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        suggested_query = review_text[brace_idx:brace_idx + jdx + 1].strip()
+                        break
+        
+        # Clean up any leading code-fence markers
+        if suggested_query:
+            suggested_query = suggested_query.replace('```', '').strip()
         
         return {
             'passed': passed,
             'comments': comments or ["Heuristic parsing applied."],
             'suggested_improvements': [],
             'security_concerns': [],
-            'performance_score': 7 if passed else 3
+            'performance_score': 7 if passed else 3,
+            'suggested_query': suggested_query
         }
     
     async def _optimize_query(

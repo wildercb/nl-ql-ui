@@ -1,6 +1,6 @@
 <template>
   <nav class="bg-gray-800 border-b border-gray-700">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div class="w-full px-4 sm:px-6 lg:px-8">
       <div class="flex items-center justify-between h-16">
         <!-- Logo and Navigation Links -->
         <div class="flex items-center">
@@ -29,6 +29,13 @@
                 :class="{ 'bg-gray-700 text-white': $route.path === '/docs' }"
               >
                 <i class="fas fa-book mr-2"></i>Docs
+              </router-link>
+              <router-link 
+                to="/prompt-guide" 
+                class="text-gray-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200"
+                :class="{ 'bg-gray-700 text-white': $route.path === '/prompt-guide' }"
+              >
+                <i class="fas fa-lightbulb mr-2"></i>Prompt Guide
               </router-link>
             </div>
           </div>
@@ -93,6 +100,14 @@
             @click="mobileMenuOpen = false"
           >
             <i class="fas fa-book mr-2"></i>Docs
+          </router-link>
+          <router-link 
+            to="/prompt-guide" 
+            class="text-gray-300 hover:text-white block px-3 py-2 rounded-md text-base font-medium"
+            :class="{ 'bg-gray-700 text-white': $route.path === '/prompt-guide' }"
+            @click="mobileMenuOpen = false"
+          >
+            <i class="fas fa-lightbulb mr-2"></i>Prompt Guide
           </router-link>
           
           <!-- Mobile auth section -->
