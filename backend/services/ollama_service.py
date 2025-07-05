@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, AsyncGenerator
 import httpx
 from pydantic import BaseModel
 
@@ -185,42 +185,48 @@ class OllamaService:
         self,
         messages: List[Dict[str, str]],
         model: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-    ):
-        """Yields chat completion tokens as they are generated."""
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Stream chat completion from Ollama with detailed model logging.
+        """
         model = model or self.default_model
-        temperature = temperature or self.settings.ollama.temperature
-        max_tokens = max_tokens or self.settings.ollama.max_tokens
-
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "options": {"temperature": temperature, "num_predict": max_tokens}
-        }
-        
-        url = f"{self.base_url}/api/chat"
+        logger.info(f"🦙 Ollama stream_chat_completion called with model: {model}")
         
         try:
-            async with self.client.stream("POST", url, json=payload, timeout=self.timeout) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    if chunk:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "stream": True,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        **kwargs
+                    },
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                if response.status_code != 200:
+                    logger.error(f"🦙 Ollama API error with model {model}: {response.status_code} - {response.text}")
+                    raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
+                
+                logger.info(f"🦙 Ollama stream started successfully with model: {model}")
+                
+                async for line in response.aiter_lines():
+                    if line.strip():
                         try:
-                            # A chunk can have multiple JSON objects
-                            for line in chunk.decode('utf-8').splitlines():
-                                if line:
-                                    data = json.loads(line)
-                                    yield data
+                            data = json.loads(line)
+                            if "message" in data:
+                                yield data
                         except json.JSONDecodeError:
-                            logger.warning(f"Failed to decode stream chunk: {chunk}")
                             continue
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Ollama API HTTP error during stream: {e.response.status_code} - {await e.response.aread()}")
-            raise
+                            
         except Exception as e:
-            logger.error(f"Unexpected error during Ollama stream: {e}")
+            logger.error(f"🦙 Ollama stream_chat_completion failed with model {model}: {e}")
             raise
 
     async def chat_completion(

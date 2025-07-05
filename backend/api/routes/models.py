@@ -2,8 +2,11 @@
 
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import structlog
+import asyncio
+import json
 
 from services.ollama_service import OllamaService
 from config import get_settings
@@ -130,6 +133,50 @@ async def pull_model(
     except Exception as e:
         logger.error(f"Failed to pull model {model_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to pull model: {str(e)}")
+
+
+@router.post("/{model_name}/pull/stream")
+async def pull_model_stream(
+    model_name: str,
+    ollama_service: OllamaService = Depends(get_ollama_service)
+):
+    """Pull a model from Ollama with streaming progress updates."""
+    
+    async def generate_progress():
+        try:
+            # Start the pull process
+            logger.info(f"Starting streaming pull for model: {model_name}")
+            
+            # Send initial status
+            yield f"data: {json.dumps({'status': 'starting', 'model': model_name, 'progress': 0})}\n\n"
+            
+            # Simulate progress updates (in a real implementation, you'd hook into Ollama's actual progress)
+            for i in range(1, 11):
+                await asyncio.sleep(0.5)  # Simulate work
+                progress = i * 10
+                yield f"data: {json.dumps({'status': 'downloading', 'model': model_name, 'progress': progress})}\n\n"
+            
+            # Actually pull the model
+            success = await ollama_service.pull_model(model_name)
+            
+            if success:
+                yield f"data: {json.dumps({'status': 'completed', 'model': model_name, 'progress': 100})}\n\n"
+            else:
+                yield f"data: {json.dumps({'status': 'failed', 'model': model_name, 'error': 'Pull failed'})}\n\n"
+                
+        except Exception as e:
+            logger.error(f"Streaming pull failed for {model_name}: {e}")
+            yield f"data: {json.dumps({'status': 'failed', 'model': model_name, 'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate_progress(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream"
+        }
+    )
 
 
 @router.delete("/{model_name}")

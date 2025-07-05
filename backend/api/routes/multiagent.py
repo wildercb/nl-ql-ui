@@ -12,21 +12,24 @@ from typing import Dict, Any, List, Optional
 import json
 import logging
 
-from services.advanced_agent_orchestration_service import (
-    AdvancedAgentOrchestrationService, 
+from services.enhanced_orchestration_service import (
+    EnhancedOrchestrationService, 
     PipelineStrategy,
+    get_orchestration_service
 )
-from services.enhanced_orchestration_service import get_orchestration_service
 
 router = APIRouter(prefix='/api/multiagent', tags=['multiagent'])
 
 class StreamRequest(BaseModel):
     query: str = Field(..., description="Natural language query to process")
     pipeline_strategy: str = Field(PipelineStrategy.STANDARD, description="Pipeline strategy to use")
+    translator_model: Optional[str] = Field(None, description="Model for translation")
+    pre_model: Optional[str] = Field(None, description="Model for preprocessing/rewriting")
+    review_model: Optional[str] = Field(None, description="Model for review")
     user_id: Optional[str] = Field(None, description="User identifier")
     session_id: Optional[str] = Field(None, description="Session identifier")
 
-async def stream_processor(service: AdvancedAgentOrchestrationService, request: StreamRequest):
+async def stream_processor(service: EnhancedOrchestrationService, request: StreamRequest):
     """Processes a request and yields SSE-formatted events."""
     logger = logging.getLogger(__name__)
     logger.info(f"🎬 Starting stream processor for query: {request.query[:50]}...")
@@ -34,6 +37,9 @@ async def stream_processor(service: AdvancedAgentOrchestrationService, request: 
     stream = service.process_query_stream(
         query=request.query,
         pipeline_strategy=request.pipeline_strategy,
+        translator_model=request.translator_model,
+        pre_model=request.pre_model,
+        review_model=request.review_model,
         user_id=request.user_id,
         session_id=request.session_id,
     )
@@ -59,7 +65,7 @@ async def stream_processor(service: AdvancedAgentOrchestrationService, request: 
 @router.post('/process/stream')
 async def stream_multiagent_processing(
     request: StreamRequest,
-    service: AdvancedAgentOrchestrationService = Depends(get_orchestration_service)
+    service: EnhancedOrchestrationService = Depends(get_orchestration_service)
 ):
     """
     Stream enhanced multi-agent processing with real-time updates.
@@ -71,7 +77,7 @@ async def stream_multiagent_processing(
 @router.post('/translate/stream')
 async def stream_translation(
     request: StreamRequest,
-    service: AdvancedAgentOrchestrationService = Depends(get_orchestration_service)
+    service: EnhancedOrchestrationService = Depends(get_orchestration_service)
 ):
     """
     Stream translation-only pipeline. This is for the 'Translate' button.
@@ -82,7 +88,7 @@ async def stream_translation(
 @router.post('/legacy/stream')
 async def stream_legacy_multiagent(
     request: StreamRequest,
-    service: AdvancedAgentOrchestrationService = Depends(get_orchestration_service)
+    service: EnhancedOrchestrationService = Depends(get_orchestration_service)
 ):
     """
     Stream standard multi-agent pipeline. This is for the 'Multi-Agent' button.

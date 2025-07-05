@@ -272,20 +272,22 @@ class EnhancedOrchestrationService:
     
     async def _execute_fast_pipeline(self, context: Dict[str, Any], model: Optional[str]) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Execute fast pipeline optimized for speed.
+        Execute fast pipeline - translation only for speed.
         
-        This pipeline skips rewriting and review for maximum throughput.
-        Ideal for simple queries or high-volume scenarios.
+        This pipeline skips rewriting and review for maximum speed,
+        making it ideal for simple queries or high-throughput scenarios.
         """
-        logger.debug(f"🚀 Executing fast pipeline for [{context['request_id']}]")
+        logger.debug(f"⚡ Executing fast pipeline for [{context['request_id']}]")
         
         agents = self.pipeline_configs[PipelineStrategy.FAST]['agents']
         total_steps = len(agents)
         
-        # Step 1: Translate
-        yield {'event': 'agent_start', 'data': {'agent': 'translator', 'step': 1, 'total_steps': 1}}
-
-        # Handle the streaming translation
+        # Step 1: Translate (only step in fast mode)
+        agent_name = 'translator'
+        model_to_use = model or self.settings.ollama.default_model
+        logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
+        yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 1, 'total_steps': total_steps}}
+        
         final_translation = {}
         prompt_messages = []
         
@@ -306,7 +308,8 @@ class EnhancedOrchestrationService:
 
         if final_translation is None:
             raise Exception("Translation failed to produce a result.")
-
+            
+        logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': 'translator', 'result': final_translation, 'prompt': prompt_messages}}
         
         result = {
@@ -334,16 +337,22 @@ class EnhancedOrchestrationService:
         
         # Step 1: Rewrite
         agent_name = 'rewriter'
+        model_to_use = pre_model or self.settings.ollama.default_model
+        logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
         yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 1, 'total_steps': total_steps}}
         rewrite_prompt, rewritten_query = await self._rewrite_query(
             context['original_query'], 
             pre_model, 
             context.get('domain_context')
         )
+        logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': agent_name, 'result': {'rewritten_query': rewritten_query}, 'prompt': rewrite_prompt}}
         
         # Step 2: Translate
-        yield {'event': 'agent_start', 'data': {'agent': 'translator', 'step': 2, 'total_steps': 3}}
+        agent_name = 'translator'
+        model_to_use = translator_model or self.settings.ollama.default_model
+        logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
+        yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 2, 'total_steps': 3}}
         
         final_translation = {}
         prompt_messages = []
@@ -366,18 +375,22 @@ class EnhancedOrchestrationService:
         if final_translation is None:
             raise Exception("Translation failed to produce a result.")
             
+        logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': 'translator', 'result': final_translation, 'prompt': prompt_messages}}
         
         graphql_query_for_review = final_translation.get('graphql_query', '')
 
         # Step 3: Review
         agent_name = 'reviewer'
+        model_to_use = review_model or self.settings.ollama.default_model
+        logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
         yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 3, 'total_steps': total_steps}}
         review_prompt, review_result = await self._review_translation(
             context['original_query'],
             graphql_query_for_review,
             review_model
         )
+        logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': agent_name, 'result': review_result, 'prompt': review_prompt}}
         
         result = {

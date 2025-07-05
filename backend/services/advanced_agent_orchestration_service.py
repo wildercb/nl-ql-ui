@@ -84,7 +84,13 @@ class AdvancedAgentOrchestrationService:
     
     # --- Streaming Method ---
     async def process_query_stream(
-        self, query: str, pipeline_strategy: str, **kwargs: Any
+        self, 
+        query: str, 
+        pipeline_strategy: str, 
+        translator_model: Optional[str] = None,
+        pre_model: Optional[str] = None,
+        review_model: Optional[str] = None,
+        **kwargs: Any
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Processes a query and streams events back."""
         yield self._create_event("session_start", session_id=kwargs.get('session_id', 'N/A'))
@@ -107,7 +113,11 @@ class AdvancedAgentOrchestrationService:
             yield self._create_event("agent_start", agent="translator", step=translator_step, total_steps=total_steps)
             
             final_translation = {}
-            stream = self.translation_service.translate_to_graphql(natural_query=rewritten_query)
+            # Use the selected model for translation
+            stream = self.translation_service.translate_to_graphql(
+                natural_query=rewritten_query,
+                model=translator_model or self.settings.ollama.default_model
+            )
             async for event in stream:
                 if event['event'] == 'agent_token':
                     yield self._create_event("agent_token", agent="translator", token=event['token'])

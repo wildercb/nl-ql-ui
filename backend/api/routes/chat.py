@@ -1,136 +1,190 @@
-from fastapi import APIRouter, HTTPException, status, Body
+"""
+Chat API Routes
+
+Handles live chat conversations with context from agent responses.
+"""
+
+from fastapi import APIRouter, HTTPException, status, Body, Depends
+from pydantic import BaseModel, Field
+from sse_starlette.sse import EventSourceResponse
 import logging
 from typing import List, Dict, Any, Optional
+import json
+import asyncio
 
 from services.translation_service import chat_with_model
+from services.ollama_service import OllamaService
+from config.settings import get_settings
 
 from models.query import ChatMessage
 
-router = APIRouter(prefix='/api', tags=['chat'])
+router = APIRouter(prefix='/api/chat', tags=['chat'])
 logger = logging.getLogger(__name__)
+
+class ChatMessageRequest(BaseModel):
+    role: str = Field(..., description="Role of the message sender ('user', 'assistant', 'system')")
+    content: str = Field(..., description="Content of the message")
+
+class ChatRequest(BaseModel):
+    messages: List[ChatMessageRequest] = Field(..., description="List of chat messages")
+    model: Optional[str] = Field(None, description="Model to use for chat")
+    stream: bool = Field(True, description="Whether to stream the response")
+    temperature: float = Field(0.7, description="Temperature for response generation")
+    max_tokens: int = Field(2048, description="Maximum tokens to generate")
+
+async def get_ollama_service() -> OllamaService:
+    """Get Ollama service instance."""
+    return OllamaService()
 
 @router.post('/chat')
 async def chat(
-    query: str = Body(..., embed=True),
-    model: str = Body(..., embed=True),
-    context: List[Dict[str, Any]] = Body(..., embed=True)
+    messages: List[ChatMessageRequest] = Body(..., description="List of chat messages"),
+    model: Optional[str] = Body(None, description="Model to use for chat")
 ):
     """
-    Handle chat interactions with the model based on user query and conversation context.
-    
-    Args:
-        query (str): The user's chat message.
-        model (str): The model to use for the chat response.
-        context (List[Dict[str, Any]]): The conversation history/context.
-    
-    Returns:
-        Dict: The model's response.
+    Chat with the model using the provided messages.
     """
     try:
-        logger.info(f"Chat request received - Query: {query}, Model: {model}, Context length: {len(context)}")
-        response = await chat_with_model(query, model, context)
-        return {'response': response}
+        logger.info(f"🦙 Chat request with model: {model or 'default'}")
+        
+        # Messages are already in the correct format
+        formatted_messages = [{"role": msg.role, "content": msg.content} for msg in messages]
+        
+        # Get the last user message as the query
+        user_messages = [msg for msg in formatted_messages if msg["role"] == "user"]
+        if not user_messages:
+            raise HTTPException(status_code=400, detail="No user message found")
+        
+        query = user_messages[-1]["content"]
+        context = [msg for msg in formatted_messages if msg["role"] != "user"]
+        
+        # Get response from the model
+        response = await chat_with_model(query, model or "phi3:mini", context)
+        
+        logger.info("✅ Chat request completed successfully")
+        return {"response": response}
+        
     except Exception as e:
-        logger.error(f"Chat error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Chat failed: {str(e)}"
-        )
+        logger.error(f"❌ Chat request failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+def build_chat_prompt(messages: List[ChatMessageRequest]) -> str:
+    """
+    Build a chat prompt from the provided messages.
+    """
+    prompt_parts = []
+    
+    for message in messages:
+        if message.role == "system":
+            prompt_parts.append(f"System: {message.content}")
+        elif message.role == "user":
+            prompt_parts.append(f"User: {message.content}")
+        elif message.role == "assistant":
+            prompt_parts.append(f"Assistant: {message.content}")
+    
+    return "\n".join(prompt_parts)
 
-@router.post('/chat/enhanced')
-async def enhanced_chat(
-    message: str = Body(...),
-    context: Dict[str, Any] = Body(...),
-    model: str = Body(default="phi3:mini")
+@router.post("/stream")
+async def stream_chat(
+    request: ChatRequest,
+    ollama_service: OllamaService = Depends(get_ollama_service)
 ):
     """
-    Enhanced chat endpoint that handles full agent context including:
-    - Original query and pipeline strategy
-    - Complete agent interaction history
-    - Generated GraphQL and data results
-    - All agent prompts and outputs for comprehensive context
+    Stream chat completion with context from agent responses.
     """
+    logger.info(f"🦙 Starting chat stream with model: {request.model or 'default'}")
+    
+    async def generate_chat_stream():
+        try:
+            # Messages are already in the correct format
+            messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+            
+            logger.info(f"📝 Processing {len(messages)} messages for chat")
+            
+            # Stream the response from Ollama
+            async for chunk in ollama_service.stream_chat_completion(
+                messages=messages,
+                model=request.model,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens
+            ):
+                # Check for done signal
+                if chunk.get('done', False):
+                    logger.info("✅ Chat stream completed")
+                    yield {
+                        "event": "done",
+                        "data": json.dumps({"status": "completed"})
+                    }
+                    break
+                
+                # Extract content from message
+                if 'message' in chunk and 'content' in chunk['message']:
+                    content = chunk['message']['content']
+                    logger.debug(f"📤 Streaming chunk: {content}")
+                    yield {
+                        "event": "message",
+                        "data": json.dumps({
+                            "choices": [{
+                                "delta": {
+                                    "content": content
+                                }
+                            }]
+                        })
+                    }
+                
+                # Small delay to prevent overwhelming the client
+                await asyncio.sleep(0.01)
+                
+        except Exception as e:
+            logger.error(f"❌ Chat stream error: {e}")
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": str(e)})
+            }
+    
+    return EventSourceResponse(generate_chat_stream())
+
+@router.post("/")
+async def chat_completion(
+    request: ChatRequest,
+    ollama_service: OllamaService = Depends(get_ollama_service)
+):
+    """
+    Non-streaming chat completion.
+    """
+    logger.info(f"🦙 Starting chat completion with model: {request.model or 'default'}")
+    
     try:
-        logger.info(f"Enhanced chat request - Message: {message}, Strategy: {context.get('pipeline_strategy', 'unknown')}")
+        # Messages are already in the correct format
+        messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
         
-        # Build comprehensive prompt with all agent context
-        enhanced_prompt = build_enhanced_prompt(message, context)
+        logger.info(f"📝 Processing {len(messages)} messages for chat")
         
-        # Use simple chat with enhanced context for now
-        # Build enhanced prompt with all context
-        enhanced_prompt = build_enhanced_prompt(message, context)
+        # Get the complete response
+        full_response = ""
+        async for chunk in ollama_service.stream_chat_completion(
+            messages=messages,
+            model=request.model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens
+        ):
+            if chunk.get('done', False):
+                break
+            
+            if 'message' in chunk and 'content' in chunk['message']:
+                full_response += chunk['message']['content']
         
-        # Use existing chat function with enhanced context
-        response = await chat_with_model(
-            query=enhanced_prompt,
-            model=model,
-            context=[]  # Context is already built into the prompt
-        )
+        logger.info("✅ Chat completion finished")
         
-        return {'response': response}
+        return {
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": full_response
+                }
+            }]
+        }
         
     except Exception as e:
-        logger.error(f"Enhanced chat error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Enhanced chat failed: {str(e)}"
-        )
-
-
-def build_enhanced_prompt(message: str, context: Dict[str, Any]) -> str:
-    """
-    Build a comprehensive prompt that includes all agent context for sophisticated chat continuation.
-    """
-    
-    prompt_parts = [
-        "You are an AI assistant with access to a complete multi-agent processing history.",
-        "The user is continuing a conversation after running sophisticated agent pipelines.",
-        "",
-        f"=== ORIGINAL CONTEXT ===",
-        f"User's Original Query: {context.get('original_query', 'Unknown')}",
-        f"Pipeline Strategy Used: {context.get('pipeline_strategy', 'Unknown')}",
-        ""
-    ]
-    
-    # Add agent history
-    if context.get('agent_history'):
-        prompt_parts.append("=== AGENT PROCESSING HISTORY ===")
-        for msg in context['agent_history']:
-            agent = msg.get('agent', 'Unknown')
-            content = msg.get('content', '')
-            prompt_parts.append(f"{agent}: {content}")
-        prompt_parts.append("")
-    
-    # Add generated GraphQL
-    if context.get('generated_graphql'):
-        prompt_parts.extend([
-            "=== GENERATED GRAPHQL QUERY ===",
-            f"```graphql\n{context['generated_graphql']}\n```",
-            ""
-        ])
-    
-    # Add data results if available
-    if context.get('data_results'):
-        prompt_parts.extend([
-            "=== DATA RESULTS ===",
-            f"Retrieved {len(context['data_results'])} records from the database.",
-            f"Sample data: {str(context['data_results'][:2]) if context['data_results'] else 'No data'}",
-            ""
-        ])
-    
-    prompt_parts.extend([
-        "=== CURRENT USER MESSAGE ===",
-        f"User: {message}",
-        "",
-        "Please respond helpfully using all the above context. You can:",
-        "- Answer questions about the query or results",
-        "- Suggest modifications to the GraphQL query",
-        "- Explain the agent processing steps",
-        "- Help analyze the data results",
-        "- Provide insights based on the pipeline strategy used",
-        "",
-        "Response:"
-    ])
-    
-    return "\n".join(prompt_parts) 
+        logger.error(f"❌ Chat completion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) 

@@ -167,22 +167,28 @@ class AdvancedOrchestrationService:
     ) -> Dict[str, Any]:
         """Execute fast pipeline - translation only for speed."""
         
-        translation_result = await self.translation_service.translate_to_graphql(
+        translation_result = None
+        translation_stream = self.translation_service.translate_to_graphql(
             natural_query=context['original_query'],
             model=model,
             schema_context=context.get('schema_context') or '',
             icl_examples=self._prepare_examples(context.get('examples', []))
         )
-        
+        async for event in translation_stream:
+            if event.get('event') == 'translation_complete':
+                translation_result = event['result']
+                break
+        if not isinstance(translation_result, dict):
+            translation_result = {}
         return {
             'original_query': context['original_query'],
             'rewritten_query': context['original_query'],  # No rewriting in fast mode
             'translation': {
-                'graphql_query': translation_result.graphql_query,
-                'confidence': translation_result.confidence,
-                'explanation': translation_result.explanation,
-                'warnings': translation_result.warnings,
-                'suggested_improvements': translation_result.suggested_improvements
+                'graphql_query': translation_result.get('graphql_query', ''),
+                'confidence': translation_result.get('confidence', 0.0),
+                'explanation': translation_result.get('explanation', ''),
+                'warnings': translation_result.get('warnings', []),
+                'suggested_improvements': translation_result.get('suggested_improvements', [])
             },
             'review': {'passed': True, 'comments': ['Fast mode - review skipped']},
             'agents_executed': ['translator'],
@@ -209,31 +215,43 @@ class AdvancedOrchestrationService:
         agents_executed.append('rewriter')
         
         # 2. Translate to GraphQL
-        translation_result = await self.translation_service.translate_to_graphql(
+        translation_result = None
+        translation_stream = self.translation_service.translate_to_graphql(
             natural_query=rewritten_query,
             model=translator_model,
             schema_context=context.get('schema_context') or '',
             icl_examples=self._prepare_examples(context.get('examples', []))
         )
+        async for event in translation_stream:
+            if event.get('event') == 'translation_complete':
+                translation_result = event['result']
+                break
+        # Ensure translation_result is a dict
+        if not isinstance(translation_result, dict):
+            translation_result = {}
         agents_executed.append('translator')
         
         # 3. Review translation
         review_result = await self._review_translation(
             context['original_query'],
-            translation_result.graphql_query or '',
+            translation_result.get('graphql_query', '') or '',
             review_model
         )
         agents_executed.append('reviewer')
-        
+
+        # If reviewer suggests a new query, update the translation result
+        if isinstance(review_result, dict) and review_result.get('suggested_query'):
+            translation_result['graphql_query'] = review_result['suggested_query']
+
         return {
             'original_query': context['original_query'],
             'rewritten_query': rewritten_query,
             'translation': {
-                'graphql_query': translation_result.graphql_query,
-                'confidence': translation_result.confidence,
-                'explanation': translation_result.explanation,
-                'warnings': translation_result.warnings,
-                'suggested_improvements': translation_result.suggested_improvements
+                'graphql_query': translation_result.get('graphql_query', ''),
+                'confidence': translation_result.get('confidence', 0.0),
+                'explanation': translation_result.get('explanation', ''),
+                'warnings': translation_result.get('warnings', []),
+                'suggested_improvements': translation_result.get('suggested_improvements', [])
             },
             'review': review_result,
             'agents_executed': agents_executed,

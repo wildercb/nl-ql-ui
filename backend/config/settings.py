@@ -42,7 +42,7 @@ class OllamaSettings(BaseSettings):
     """Ollama AI model configuration."""
     
     base_url: str = Field("http://localhost:11434")
-    default_model: str = Field("llama2")
+    default_model: str = Field("phi3:mini")
     timeout: int = Field(120)
     max_tokens: int = Field(4096)
     temperature: float = Field(0.7)

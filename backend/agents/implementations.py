@@ -31,7 +31,7 @@ class RewriterAgent(BaseAgent):
     """
     Rewrites natural language queries to be clearer and more specific.
     
-    Uses sophisticated prompting strategies to:
+    Uses prompting strategies to:
     - Clarify ambiguous queries
     - Expand abbreviations and pronouns
     - Add context and specificity
@@ -333,25 +333,7 @@ class ReviewerAgent(BaseAgent):
     
     def _build_review_prompt(self) -> str:
         """Build system prompt for GraphQL review."""
-        return """You are a senior GraphQL expert and security analyst.
-
-Your task is to review GraphQL queries for:
-1. Syntax correctness
-2. Security vulnerabilities  
-3. Performance issues
-4. Best practices compliance
-5. Optimization opportunities
-
-Provide detailed, actionable feedback that helps improve the query quality.
-
-Respond in JSON format:
-{
-  "passed": boolean,
-  "comments": ["specific feedback points"],
-  "suggested_improvements": ["concrete improvement suggestions"],
-  "security_concerns": ["any security issues found"],
-  "performance_score": 1-10
-}"""
+        return """You are a senior GraphQL expert and security analyst.\n\nYour task is to review GraphQL queries for:\n1. Syntax correctness\n2. Security vulnerabilities  \n3. Performance issues\n4. Best practices compliance\n5. Optimization opportunities\n\nIf you recommend any changes, provide a corrected GraphQL query in the field 'suggested_query'.\n\nRespond in JSON format:\n{\n  \"passed\": boolean,\n  \"comments\": [\"specific feedback points\"],\n  \"suggested_improvements\": [\"concrete improvement suggestions\"],\n  \"security_concerns\": [\"any security issues found\"],\n  \"performance_score\": 1-10,\n  \"suggested_query\": \"(optional, corrected GraphQL query if you recommend changes)\"\n}"""
     
     def _build_user_review_prompt(self, original_query: str, graphql_query: str) -> str:
         """Build user prompt with queries to review."""
@@ -370,7 +352,11 @@ Provide comprehensive feedback on correctness, security, and optimization opport
             import json
             # Try to parse as JSON first
             if raw_response.strip().startswith('{'):
-                return json.loads(raw_response.strip())
+                parsed = json.loads(raw_response.strip())
+                # Ensure suggested_query is always present (may be None)
+                if 'suggested_query' not in parsed:
+                    parsed['suggested_query'] = None
+                return parsed
         except:
             pass
         
@@ -387,7 +373,8 @@ Provide comprehensive feedback on correctness, security, and optimization opport
             'suggested_improvements': [],
             'security_concerns': [],
             'performance_score': 7,
-            'raw_response': raw_response
+            'raw_response': raw_response,
+            'suggested_query': None
         }
 
 

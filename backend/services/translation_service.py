@@ -203,6 +203,8 @@ Only return JSON, no extra text."""
             raise ValueError("Natural language query cannot be empty")
 
         model = model or self.settings.ollama.default_model
+        logger.info(f"🦙 Translation service using model: {model}")
+        
         selected_icl_examples = icl_examples if icl_examples is not None else get_initial_icl_examples()[:3]
         system_prompt = self._build_system_prompt(schema_context, selected_icl_examples)
         
@@ -221,6 +223,7 @@ Remember to return only the JSON object with the specified structure."""
 
         full_response_text = ""
         try:
+            logger.info(f"🦙 Starting Ollama chat completion with model: {model}")
             stream = self.ollama_service.stream_chat_completion(
                 messages=messages,
                 model=model,
@@ -232,6 +235,8 @@ Remember to return only the JSON object with the specified structure."""
                 if token:
                     full_response_text += token
                     yield {"event": "agent_token", "token": token}
+            
+            logger.info(f"🦙 Ollama chat completion completed with model: {model}")
             
             # Final processing after stream is complete
             result_data = self._extract_json_from_response(full_response_text)
@@ -255,7 +260,7 @@ Remember to return only the JSON object with the specified structure."""
             yield {"event": "translation_complete", "result": final_result}
 
         except Exception as e:
-            logger.error(f"Translation streaming failed: {e}")
+            logger.error(f"Translation streaming failed with model {model}: {e}")
             yield {"event": "error", "message": str(e)}
 
     async def batch_translate(

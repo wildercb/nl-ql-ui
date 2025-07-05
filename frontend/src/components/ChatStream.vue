@@ -35,6 +35,27 @@
           <span class="ml-2">Processing...</span>
       </div>
     </div>
+
+    <!-- Chat Input -->
+    <div class="p-4 border-t border-gray-700">
+      <div class="flex space-x-2">
+        <input
+          v-model="chatInput"
+          @keyup.enter="sendMessage"
+          :disabled="isChatProcessing"
+          type="text"
+          placeholder="Continue the conversation..."
+          class="flex-1 bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+        />
+        <button
+          @click="sendMessage"
+          :disabled="!chatInput.trim() || isChatProcessing"
+          class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -54,9 +75,16 @@ const props = defineProps<{
   title?: string;
   messages: Message[];
   loading: boolean;
+  selectedModel?: string;
+}>();
+
+const emit = defineEmits<{
+  sendMessage: [message: string];
 }>();
 
 const scrollArea = ref<HTMLElement | null>(null);
+const chatInput = ref('');
+const isChatProcessing = ref(false);
 
 const scrollToBottom = () => {
   nextTick(() => {
@@ -64,6 +92,22 @@ const scrollToBottom = () => {
       scrollArea.value.scrollTop = scrollArea.value.scrollHeight;
     }
   });
+};
+
+const sendMessage = async () => {
+  if (!chatInput.value.trim() || isChatProcessing.value) return;
+  
+  const message = chatInput.value.trim();
+  chatInput.value = '';
+  isChatProcessing.value = true;
+  
+  try {
+    emit('sendMessage', message);
+  } catch (error) {
+    console.error('Failed to send message:', error);
+  } finally {
+    isChatProcessing.value = false;
+  }
 };
 
 const renderMarkdown = (content: string) => {

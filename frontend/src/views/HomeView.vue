@@ -26,46 +26,57 @@
       <!-- Input Area -->
       <div class="mb-4">
         <textarea
-            v-model="naturalQuery"
-            @keyup.enter="runPipeline('standard')"
-            :disabled="isProcessing"
-            class="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-            placeholder="Enter your natural language query here..."
+          v-model="naturalQuery"
+          @keyup.enter="runPipeline('standard')"
+          :disabled="isProcessing"
+          class="w-full p-3 bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+          placeholder="Enter your natural language query here..."
         ></textarea>
-        <div class="flex space-x-2 mt-2">
-            <button @click="runPipeline('fast')" :disabled="isProcessing" class="btn-primary">
-                <i class="fas fa-bolt mr-2"></i> Translate
-            </button>
-            <button @click="runPipeline('standard')" :disabled="isProcessing" class="btn-primary">
-                <i class="fas fa-users-cog mr-2"></i> Multi-Agent
-            </button>
-            <button @click="runPipeline('comprehensive')" :disabled="isProcessing" class="btn-primary">
-                <i class="fas fa-rocket mr-2"></i> Enhanced Agents
-            </button>
+        <div class="flex space-x-2 mt-2 items-center">
+          <button @click="runPipeline('fast')" :disabled="isProcessing" class="btn-primary">
+            <i class="fas fa-bolt mr-2"></i> Translate
+          </button>
+          <button @click="runPipeline('standard')" :disabled="isProcessing" class="btn-primary">
+            <i class="fas fa-users-cog mr-2"></i> Multi-Agent
+          </button>
+          <button @click="runPipeline('comprehensive')" :disabled="isProcessing" class="btn-primary">
+            <i class="fas fa-rocket mr-2"></i> Enhanced Agents
+          </button>
+          <select v-model="selectedModel" class="ml-4 p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
+            <option value="phi3:mini">phi3:mini</option>
+            <option value="gemma3:4b">gemma3:4b</option>
+            <option value="llama4:16x17b">llama4:16x17b</option>
+          </select>
         </div>
       </div>
-      
+
       <!-- Results Area -->
       <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 overflow-hidden">
         <!-- Left Panel: Chat Stream -->
         <div class="flex flex-col overflow-hidden">
-            <ChatStream :messages="chatMessages" :loading="isProcessing" title="Agent Stream" />
+          <ChatStream 
+            :messages="chatMessages" 
+            :loading="isProcessing" 
+            title="Agent Stream" 
+            :selectedModel="selectedModel"
+            @sendMessage="handleChatMessage"
+          />
         </div>
-        
+
         <!-- Right Panel: GraphQL and Data -->
         <div class="flex flex-col space-y-6 overflow-hidden">
-            <GraphQLQueryBox :query="finalGraphQLQuery" @send="runDataQuery" />
-            <DataResults :results="dataQueryResults" :loading="isDataLoading" />
+          <GraphQLQueryBox :query="finalGraphQLQuery" @send="runDataQuery" />
+          <DataResults :results="dataQueryResults" :loading="isDataLoading" />
         </div>
       </div>
     </div>
-    
+
     <AuthModal :show="showAuthModal" @close="showAuthModal = false" @authenticated="onAuthenticated" @guest="onGuestSession" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, nextTick, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { useHistoryStore } from '../stores/history';
@@ -78,6 +89,10 @@ const authStore = useAuthStore();
 const historyStore = useHistoryStore();
 const router = useRouter();
 
+// Model selection
+const selectedModel = ref('phi3:mini');
+
+// Pipeline state
 const naturalQuery = ref('');
 const chatMessages = ref<any[]>([]);
 const isProcessing = ref(false);
@@ -87,14 +102,19 @@ const finalGraphQLQuery = ref('');
 const isDataLoading = ref(false);
 const dataQueryResults = ref<any[]>([]);
 
+// Agent prompts and context
+const agentPrompts = ref<any[]>([]);
+const agentContext = ref<string>('');
+
 const runPipeline = async (strategy: string) => {
   if (!naturalQuery.value.trim() || isProcessing.value) return;
 
-  console.log('🚀 Starting pipeline with strategy:', strategy);
+  console.log('🚀 Starting pipeline with strategy:', strategy, 'using model:', selectedModel.value);
   isProcessing.value = true;
   chatMessages.value = [];
   finalGraphQLQuery.value = '';
   dataQueryResults.value = [];
+  agentPrompts.value = [];
 
   chatMessages.value.push({ role: 'user', content: naturalQuery.value, timestamp: new Date().toLocaleTimeString() });
 
@@ -103,7 +123,13 @@ const runPipeline = async (strategy: string) => {
     const response = await fetch('/api/multiagent/process/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: naturalQuery.value, pipeline_strategy: strategy }),
+      body: JSON.stringify({ 
+        query: naturalQuery.value, 
+        pipeline_strategy: strategy,
+        translator_model: selectedModel.value,
+        pre_model: selectedModel.value,
+        review_model: selectedModel.value
+      }),
     });
 
     console.log('📥 Response status:', response.status, 'headers:', Object.fromEntries(response.headers.entries()));
@@ -217,6 +243,11 @@ const handleStreamEvent = (event: any) => {
         agentMessage.isStreaming = false;
         if (data.agent === 'reviewer') {
           agentMessage.content = formatReviewResult(data.result);
+          // If reviewer suggests a new query, update the GraphQL query in the UI
+          if (data.result && data.result.suggested_query) {
+            console.log('📝 Reviewer suggested new GraphQL query:', data.result.suggested_query);
+            finalGraphQLQuery.value = data.result.suggested_query;
+          }
         } else if (data.agent === 'rewriter') {
           agentMessage.content = data.result?.rewritten_query || '';
         } else if (data.agent === 'translator' && data.result?.graphql_query) {
@@ -226,6 +257,15 @@ const handleStreamEvent = (event: any) => {
         console.log('💬 Marked agent as completed, kept output or set result');
       } else {
         console.log('⚠️ Could not find agent message for completion:', data.agent);
+      }
+      
+      // Store agent prompts for context
+      if (data.prompt) {
+        agentPrompts.value.push({
+          agent: data.agent,
+          prompt: data.prompt,
+          result: data.result
+        });
       }
       break;
       
@@ -242,6 +282,9 @@ const handleStreamEvent = (event: any) => {
         timestamp: new Date().toLocaleTimeString(),
       });
       console.log('💬 Added pipeline complete message');
+      
+      // Build context for chat
+      buildChatContext();
       break;
       
     case 'error':
@@ -261,6 +304,149 @@ const handleStreamEvent = (event: any) => {
   
   console.log('📊 Current chat messages:', chatMessages.value);
   console.log('🔍 Current GraphQL query:', finalGraphQLQuery.value);
+};
+
+const buildChatContext = () => {
+  // Build context from agent responses and prompts
+  let context = `Original Query: ${naturalQuery.value}\n\n`;
+  
+  // Add agent responses
+  context += 'Agent Responses:\n';
+  chatMessages.value.forEach(msg => {
+    if (msg.role === 'agent' && msg.agent) {
+      context += `${msg.agent}: ${msg.content}\n`;
+    }
+  });
+  
+  // Add agent prompts
+  if (agentPrompts.value.length > 0) {
+    context += '\nAgent Prompts:\n';
+    agentPrompts.value.forEach(prompt => {
+      context += `${prompt.agent}:\n`;
+      if (Array.isArray(prompt.prompt)) {
+        prompt.prompt.forEach((msg: any) => {
+          context += `${msg.role}: ${msg.content}\n`;
+        });
+      } else {
+        context += `${prompt.prompt}\n`;
+      }
+      context += `Result: ${JSON.stringify(prompt.result)}\n\n`;
+    });
+  }
+  
+  agentContext.value = context;
+};
+
+const handleChatMessage = async (message: string) => {
+  console.log('💬 Handling chat message:', message);
+  
+  // Add user message to chat
+  chatMessages.value.push({
+    role: 'user',
+    content: message,
+    timestamp: new Date().toLocaleTimeString()
+  });
+  
+  // Add assistant message placeholder
+  const assistantMessage = {
+    role: 'agent',
+    agent: 'assistant',
+    content: '',
+    timestamp: new Date().toLocaleTimeString(),
+    isStreaming: true
+  };
+  chatMessages.value.push(assistantMessage);
+  
+  // Get reference to the message for updates
+  const messageIndex = chatMessages.value.length - 1;
+  
+  try {
+    // Prepare messages for the chat
+    const messages = [];
+    
+    // Add context if available
+    if (agentContext.value) {
+      messages.push({
+        role: 'system',
+        content: `You are a helpful assistant. Use the following context from the pipeline execution to provide informed responses:\n\n${agentContext.value}`
+      });
+    }
+    
+    // Add previous chat messages
+    chatMessages.value.forEach(msg => {
+      if (msg.role === 'user' || (msg.role === 'agent' && msg.agent === 'assistant')) {
+        messages.push({
+          role: msg.role === 'agent' ? 'assistant' : msg.role,
+          content: msg.content
+        });
+      }
+    });
+    
+    // Make request to chat endpoint with all required fields
+    const response = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: messages,
+        model: selectedModel.value,
+        stream: true,
+        temperature: 0.7,
+        max_tokens: 2048
+      })
+    });
+    
+    if (!response.body) throw new Error("Response body is null");
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+      
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      
+      for (const line of lines) {
+        console.log('📝 Processing SSE line:', line);
+        
+        if (line.startsWith('event: ')) {
+          const eventType = line.slice(7);
+          console.log('🎯 Event type:', eventType);
+        } else if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          console.log('📊 Event data:', data);
+          
+          if (data === '[DONE]') continue;
+          
+          try {
+            const parsed = JSON.parse(data);
+            console.log('🔍 Parsed data:', parsed);
+            
+            if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) {
+              const content = parsed.choices[0].delta.content;
+              console.log('📝 Adding content:', content);
+              // Update the message in the reactive array
+              chatMessages.value[messageIndex].content += content;
+            }
+          } catch (e) {
+            console.error('Failed to parse chat response:', e);
+          }
+        }
+      }
+    }
+    
+    chatMessages.value[messageIndex].isStreaming = false;
+    
+  } catch (error) {
+    console.error('Chat error:', error);
+    chatMessages.value[messageIndex].content = 'Sorry, I encountered an error. Please try again.';
+    chatMessages.value[messageIndex].isStreaming = false;
+  }
 };
 
 const runDataQuery = async () => {
