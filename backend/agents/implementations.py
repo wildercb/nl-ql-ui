@@ -725,8 +725,28 @@ Consider:
         if schema_context:
             schema_section = f"\n\nGraphQL Schema (SDL):\n```graphql\n{schema_context[:4000]}\n```"
 
+        # Teach the model the subset of GraphQL our executor supports
+        executor_rules = """
+AVAILABLE EXECUTOR
+The backend can only run VERY simple queries that match this pattern:
+
+query { collectionName(limit: N) { fieldA fieldB ... } }
+
+Rules:
+1. Exactly one collection (Mongo collection name) after the opening brace.
+2. Optional (limit: INT) argument only – no filter, orderBy, where, or nested args.
+3. Inside the inner braces list ONLY scalar field names present in the documents.
+4. Do NOT use commas between field names.
+5. No variables ($var) – embed constant values or omit them.
+6. Return at most 5–10 scalar fields to keep responses small.
+
+If the user's intent requires filtering or ordering, pre-select the right collection and fields manually and rely on downstream analysis; complex filters are NOT supported yet.
+"""
+
         prompt = f"""You are a GraphQL query improvement specialist. Based on the analysis of a failed or suboptimal query, generate a better GraphQL query.{schema_section}{examples_section}
-            
+
+{executor_rules}
+
 Generate an improved GraphQL query that addresses the issues described below.
 
 Original User Intent: "{original_query}"
