@@ -28,9 +28,19 @@
               <div class="flex items-center space-x-2">
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">Model:</label>
                 <select v-model="selectedModel" class="select">
-                  <option value="phi3:mini">phi3:mini (Fast)</option>
-                  <option value="llama2">llama2 (Balanced)</option>
-                  <option value="llama2:13b">llama2:13b (High Quality)</option>
+                  <option value="phi3:mini">phi3:mini (Ollama)</option>
+                  <option value="gemma3:4b">gemma3:4b (Ollama)</option>
+                  <option value="gemma:7b">gemma:7b (Ollama)</option>
+                  <option value="llama3:8b">llama3:8b (Ollama)</option>
+                  <!-- Groq models -->
+                  <option value="groq::llama3-8b-8192">Groq – Llama3-8B-8192</option>
+                  <option value="groq::llama3-70b-8192">Groq – Llama3-70B-8192</option>
+                  <option value="groq::mixtral-8x7b-32768">Groq – Mixtral-8x7B-32K</option>
+                  <!-- OpenRouter models -->
+                  <option value="openrouter::meta-llama/llama-3-8b-instruct">OpenRouter – Llama3-8B-Instruct</option>
+                  <option value="openrouter::mistralai/mixtral-8x7b">OpenRouter – Mixtral-8x7B</option>
+                  <option value="openrouter::google/gemma-7b-it">OpenRouter – Gemma-7B-IT</option>
+                  <option value="openrouter::thudm/chatglm3-6b-32k">OpenRouter – ChatGLM3-6B-32K</option>
                 </select>
               </div>
               <div class="flex items-center space-x-2">

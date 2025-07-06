@@ -20,7 +20,8 @@ from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
 from config.settings import get_settings
-from services.ollama_service import OllamaService, GenerationResult
+from services.llm_factory import resolve_llm
+from services.ollama_service import GenerationResult
 from services.translation_service import TranslationService, TranslationResult
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,6 @@ class AgentOrchestrationService:
 
     def __init__(self):
         self.settings = get_settings()
-        self.ollama_service = OllamaService()
         self.translation_service = TranslationService()
 
     # ---------------------------------------------------------------------
@@ -87,11 +87,12 @@ class AgentOrchestrationService:
     # AGENT HELPERS
     # ---------------------------------------------------------------------
     async def _call_llm(self, messages: List[Dict[str, str]], model: str) -> GenerationResult:
-        """Tiny wrapper around ``OllamaService.chat_completion`` with logging."""
+        """Generic LLM call routed via provider factory."""
+        service, provider, stripped_model = resolve_llm(model)
         start = time.time()
-        result = await self.ollama_service.chat_completion(messages=messages, model=model)
+        result = await service.chat_completion(messages=messages, model=stripped_model)
         logger.debug(
-            f"LLM call (model={model}) took {time.time() - start:.2f}s and returned "
+            f"LLM call provider={provider} model={stripped_model} took {time.time() - start:.2f}s and returned "
             f"{len(result.text)} chars"
         )
         return result

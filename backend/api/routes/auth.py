@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, Response, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 import bcrypt
 import jwt
 import logging
@@ -22,11 +22,9 @@ settings = get_settings()
 
 # Request/Response Models
 class UserRegistration(BaseModel):
-    """User registration request."""
+    """User registration request (only username and password)."""
     username: str = Field(..., min_length=3, max_length=50)
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-    full_name: Optional[str] = Field(None, max_length=200)
+    password: str
 
 
 class UserLogin(BaseModel):
@@ -46,10 +44,9 @@ class TokenResponse(BaseModel):
 
 
 class UserProfile(BaseModel):
-    """User profile response."""
+    """User profile response (email removed)."""
     id: str
     username: str
-    email: str
     full_name: Optional[str]
     is_verified: bool
     total_queries: int
@@ -148,7 +145,7 @@ async def get_session_from_request(request: Request) -> Optional[str]:
 async def register(user_data: UserRegistration, request: Request):
     """Register a new user account."""
     try:
-        # Check if username or email already exists
+        # Check if username already exists
         existing_username = await User.find_one(User.username == user_data.username)
         if existing_username:
             raise HTTPException(
@@ -156,20 +153,11 @@ async def register(user_data: UserRegistration, request: Request):
                 detail="Username already registered"
             )
         
-        existing_email = await User.find_one(User.email == user_data.email)
-        if existing_email:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
-            )
-        
         # Create new user
         hashed_password = hash_password(user_data.password)
         user = User(
             username=user_data.username,
-            email=user_data.email,
             hashed_password=hashed_password,
-            full_name=user_data.full_name,
             registration_source="web"
         )
         
@@ -200,8 +188,6 @@ async def register(user_data: UserRegistration, request: Request):
             user={
                 "id": str(user.id),
                 "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
                 "subscription_tier": user.subscription_tier
             }
         )
@@ -218,13 +204,8 @@ async def register(user_data: UserRegistration, request: Request):
 async def login(user_data: UserLogin, request: Request, response: Response):
     """Login with username and password."""
     try:
-        # Find user by username or email
-        user = await User.find_one(
-            {"$or": [
-                {"username": user_data.username},
-                {"email": user_data.username}
-            ]}
-        )
+        # Find user by username
+        user = await User.find_one({"username": user_data.username})
         
         if not user or not verify_password(user_data.password, user.hashed_password):
             raise HTTPException(
@@ -283,8 +264,6 @@ async def login(user_data: UserLogin, request: Request, response: Response):
             user={
                 "id": str(user.id),
                 "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
                 "subscription_tier": user.subscription_tier,
                 "total_queries": user.total_queries,
                 "successful_queries": user.successful_queries
@@ -370,7 +349,6 @@ async def get_current_user_profile(current_user: User = Depends(get_current_user
     return UserProfile(
         id=str(current_user.id),
         username=current_user.username,
-        email=current_user.email,
         full_name=current_user.full_name,
         is_verified=current_user.is_verified,
         total_queries=current_user.total_queries,
@@ -445,8 +423,6 @@ async def refresh_token(request: Request):
             user={
                 "id": str(user.id),
                 "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
                 "subscription_tier": user.subscription_tier
             }
         )

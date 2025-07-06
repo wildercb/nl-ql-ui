@@ -13,6 +13,8 @@ services:
     env_file:
       - ./config/debug.env
     environment:
+      - GROQ_API_KEY=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
+      - OPENROUTER_API_KEY=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
       - MONGODB_URL=mongodb://mongo:27017
       - MONGODB_DATABASE=mppw_mcp
       - DATA_MONGODB_URL=mongodb://mongo_data:27017

@@ -55,7 +55,7 @@
         <div class="hidden md:block">
           <div v-if="authStore.isAuthenticated" class="flex items-center space-x-4">
             <span class="text-sm text-gray-300">
-              Welcome, {{ authStore.isGuest ? 'Guest' : authStore.currentUser?.email }}
+              Welcome, {{ authStore.isGuest ? 'Guest' : authStore.currentUser?.username }}
             </span>
             <button 
               @click="handleLogout" 
@@ -114,7 +114,7 @@
           <div class="pt-4 border-t border-gray-700">
             <div v-if="authStore.isAuthenticated" class="flex items-center justify-between px-3 py-2">
               <span class="text-sm text-gray-300">
-                Welcome, {{ authStore.isGuest ? 'Guest' : authStore.currentUser?.email }}
+                Welcome, {{ authStore.isGuest ? 'Guest' : authStore.currentUser?.username }}
               </span>
               <button 
                 @click="handleLogout" 

@@ -24,11 +24,21 @@
               <i class="fas fa-rocket mr-2"></i> Enhanced Agents
             </button>
             <select v-model="selectedModel" class="p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
-              <option value="phi3:mini">phi3:mini</option>
-              <option value="gemma3n:e2b">gemma3n:e2b</option>
-              <option value="gemma3n:e4b">gemma3n:e4b</option>
-              <option value="gemma:7b">gemma:7b</option>
-              <option value="llama3:8b">llama3:8b</option>
+              <option value="phi3:mini">phi3:mini (Ollama)</option>
+              <option value="gemma3:4b">gemma3:4b (Ollama)</option>
+              <option value="gemma3n:e2b">gemma3n:e2b (Ollama)</option>
+              <option value="gemma3n:e4b">gemma3n:e4b (Ollama)</option>
+              <option value="gemma:7b">gemma:7b (Ollama)</option>
+              <option value="llama3:8b">llama3:8b (Ollama)</option>
+              <!-- Groq models -->
+              <option value="groq::llama3-8b-8192">Groq – Llama3-8B-8192</option>
+              <option value="groq::llama3-70b-8192">Groq – Llama3-70B-8192</option>
+              <option value="groq::mixtral-8x7b-32768">Groq – Mixtral-8x7B-32K</option>
+              <!-- OpenRouter models -->
+              <option value="openrouter::meta-llama/llama-3-8b-instruct">OpenRouter – Llama3-8B-Instruct</option>
+              <option value="openrouter::mistralai/mixtral-8x7b">OpenRouter – Mixtral-8x7B</option>
+              <option value="openrouter::google/gemma-7b-it">OpenRouter – Gemma-7B-IT</option>
+              <option value="openrouter::thudm/chatglm3-6b-32k">OpenRouter – ChatGLM3-6B-32K</option>
             </select>
           </div>
         </div>
@@ -39,6 +49,7 @@
             :loading="isProcessing" 
             title="Agent Stream" 
             :selectedModel="selectedModel"
+            :prompts="agentPrompts"
             @sendMessage="handleChatMessage"
           />
         </div>
@@ -88,6 +99,24 @@ const dataQueryResults = ref<any[]>([]);
 // Agent prompts and context
 const agentPrompts = ref<any[]>([]);
 const agentContext = ref<string>('');
+
+const isValidGraphQL = (q: string) => {
+  return /\{[\s\S]*\}/.test(q);
+};
+
+const sanitizeGraphQL = (q: string) => {
+  if (!q) return '';
+  q = q.replace(/```graphql|```/g, '').trim();
+  try {
+    const obj = JSON.parse(q);
+    if (typeof obj === 'string') return obj;
+    if (obj.graphql) return obj.graphql;
+    if (obj.query) return obj.query;
+    if (obj.suggested_query) return obj.suggested_query;
+  } catch {}
+  const match = q.match(/(query|mutation)?[\s\S]*\{[\s\S]*\}/);
+  return match ? match[0] : '';
+};
 
 const runPipeline = async (strategy: string) => {
   if (!naturalQuery.value.trim() || isProcessing.value) return;
@@ -203,6 +232,29 @@ const handleStreamEvent = (event: any) => {
       };
       chatMessages.value.push(startMessage);
       console.log('💬 Added start message, total messages:', chatMessages.value.length);
+
+      // Ensure a placeholder prompt is recorded so it appears immediately when prompts are toggled
+      const existingPromptIdx = agentPrompts.value.findIndex(p => p.agent === data.agent);
+      if (data.prompt) {
+        if (existingPromptIdx !== -1) {
+          agentPrompts.value[existingPromptIdx].prompt = data.prompt;
+        } else {
+          agentPrompts.value.push({
+            agent: data.agent,
+            prompt: data.prompt,
+            result: null,
+            timestamp: new Date().toLocaleTimeString()
+          });
+        }
+      } else if (existingPromptIdx === -1) {
+        // no prompt yet, create placeholder
+        agentPrompts.value.push({
+          agent: data.agent,
+          prompt: 'Generating prompt…',
+          result: null,
+          timestamp: new Date().toLocaleTimeString()
+        });
+      }
       break;
       
     case 'agent_token':
@@ -229,7 +281,7 @@ const handleStreamEvent = (event: any) => {
           // If reviewer suggests a new query, update the GraphQL query in the UI
           if (data.result && data.result.suggested_query) {
             console.log('📝 Reviewer suggested new GraphQL query:', data.result.suggested_query);
-            finalGraphQLQuery.value = data.result.suggested_query;
+            finalGraphQLQuery.value = sanitizeGraphQL(data.result.suggested_query);
 
             // Automatically execute the newly suggested query so results stream in live
             try {
@@ -239,11 +291,68 @@ const handleStreamEvent = (event: any) => {
               console.error('Failed to auto-run data query:', e);
             }
           }
+        } else if (data.agent === 'data_reviewer') {
+          agentMessage.content = formatDataReviewResult(data.result);
+          // If data reviewer suggests a new query, update and execute it
+          if (data.result && data.result.suggested_query) {
+            console.log('🔍 Data reviewer suggested new GraphQL query:', data.result.suggested_query);
+            finalGraphQLQuery.value = sanitizeGraphQL(data.result.suggested_query);
+            
+            // Show the query execution results in the data reviewer message
+            if (data.result.query_result) {
+              const queryResult = data.result.query_result;
+              if (queryResult.success) {
+                agentMessage.content += `\n\n📊 **Query Results:**\n\`\`\`json\n${JSON.stringify(queryResult.data, null, 2)}\n\`\`\``;
+              } else {
+                agentMessage.content += `\n\n❌ **Query Failed:**\n\`\`\`\n${queryResult.error || 'Unknown error'}\n\`\`\``;
+                if (queryResult.errors && queryResult.errors.length > 0) {
+                  agentMessage.content += `\n\n**Errors:**\n${queryResult.errors.map(e => `- ${e}`).join('\n')}`;
+                }
+              }
+            }
+
+            // Automatically execute the newly suggested query
+            try {
+              console.log('🚀 Auto-executing data reviewer suggested query');
+              runDataQuery();
+            } catch (e) {
+              console.error('Failed to auto-run data reviewer query:', e);
+            }
+          }
         } else if (data.agent === 'rewriter') {
           agentMessage.content = data.result?.rewritten_query || '';
         } else if (data.agent === 'translator' && data.result?.graphql_query) {
           console.log('🔍 Setting GraphQL query:', data.result.graphql_query);
-          finalGraphQLQuery.value = data.result.graphql_query;
+          finalGraphQLQuery.value = sanitizeGraphQL(data.result.graphql_query);
+        } else if (data.agent === 'data_reviewer') {
+          console.log('🔍 Data reviewer completed:', data.result);
+          agentMessage.content = formatDataReviewResult(data.result);
+          
+          // If data reviewer refined the query after analyzing results, update and re-run
+          if (data.result?.final_query && data.result.final_query !== finalGraphQLQuery.value) {
+            console.log('📝 Data reviewer refined GraphQL query:', data.result.final_query);
+            finalGraphQLQuery.value = sanitizeGraphQL(data.result.final_query);
+            
+            // Auto-execute the refined query
+            try {
+              runDataQuery();
+            } catch (e) {
+              console.error('Failed to auto-run refined data query:', e);
+            }
+          }
+          
+          // Show iteration details in the chat
+          if (data.result?.iterations) {
+            data.result.iterations.forEach((iteration, idx) => {
+              chatMessages.value.push({
+                role: 'agent',
+                agent: 'data_reviewer',
+                content: `Iteration ${iteration.iteration}: ${iteration.analysis?.reasoning || 'Analyzing results...'}`,
+                timestamp: new Date().toLocaleTimeString(),
+                isStreaming: false
+              });
+            });
+          }
         }
         console.log('💬 Marked agent as completed, kept output or set result');
       } else {
@@ -252,11 +361,18 @@ const handleStreamEvent = (event: any) => {
       
       // Store agent prompts for context
       if (data.prompt) {
-        agentPrompts.value.push({
-          agent: data.agent,
-          prompt: data.prompt,
-          result: data.result
-        });
+        const idx = agentPrompts.value.findIndex(p => p.agent === data.agent);
+        if (idx !== -1) {
+          agentPrompts.value[idx].prompt = data.prompt;
+          agentPrompts.value[idx].result = data.result;
+        } else {
+          agentPrompts.value.push({
+            agent: data.agent,
+            prompt: data.prompt,
+            result: data.result,
+            timestamp: new Date().toLocaleTimeString()
+          });
+        }
       }
       break;
       
@@ -264,7 +380,7 @@ const handleStreamEvent = (event: any) => {
       console.log('🏁 Pipeline completed, final data:', data);
       if (data.translation?.graphql_query && !finalGraphQLQuery.value) {
         console.log('🔍 Setting GraphQL query from pipeline complete:', data.translation.graphql_query);
-        finalGraphQLQuery.value = data.translation.graphql_query;
+        finalGraphQLQuery.value = sanitizeGraphQL(data.translation.graphql_query);
       }
       chatMessages.value.push({
         role: 'agent',
@@ -442,6 +558,10 @@ const handleChatMessage = async (message: string) => {
 
 const runDataQuery = async () => {
     if (!finalGraphQLQuery.value.trim()) return;
+    if (!isValidGraphQL(finalGraphQLQuery.value)) {
+      console.warn('⚠️ Ignoring invalid GraphQL query:', finalGraphQLQuery.value);
+      return;
+    }
     isDataLoading.value = true;
     dataQueryResults.value = [];
     try {
@@ -472,8 +592,98 @@ onMounted(() => {
 });
 
 function formatReviewResult(result) {
-  if (!result) return '';
-  // Show comments and improvements as pretty JSON
+  if (!result) return 'No review result available';
+  
+  let content = `**Review Status:** ${result.passed ? '✅ Passed' : '❌ Failed'}\n\n`;
+  
+  if (result.comments && result.comments.length > 0) {
+    content += `**Comments:**\n${result.comments.map(c => `- ${c}`).join('\n')}\n\n`;
+  }
+  
+  if (result.suggested_improvements && result.suggested_improvements.length > 0) {
+    content += `**Suggested Improvements:**\n${result.suggested_improvements.map(s => `- ${s}`).join('\n')}\n\n`;
+  }
+  
+  if (result.security_concerns && result.security_concerns.length > 0) {
+    content += `**Security Concerns:**\n${result.security_concerns.map(s => `- ${s}`).join('\n')}\n\n`;
+  }
+  
+  if (result.performance_score !== undefined) {
+    content += `**Performance Score:** ${result.performance_score}/10\n\n`;
+  }
+  
+  if (result.suggested_query) {
+    content += `**Suggested Query:**\n\`\`\`graphql\n${result.suggested_query}\n\`\`\``;
+  }
+  
+  return content;
+}
+
+function formatDataReviewResult(result) {
+  if (!result) return 'No data review result available';
+  
+  let content = `**Data Review Analysis**\n\n`;
+  
+  // Satisfaction status
+  content += `**Satisfied:** ${result.satisfied ? '✅ Yes' : '❌ No'}\n\n`;
+  
+  // Accuracy score
+  if (result.accuracy_score !== undefined) {
+    content += `**Accuracy Score:** ${result.accuracy_score}/10\n\n`;
+  }
+  
+  // Data quality
+  if (result.data_quality) {
+    const qualityEmoji = {
+      'excellent': '🌟',
+      'good': '✅',
+      'poor': '⚠️',
+      'failed': '❌'
+    };
+    content += `**Data Quality:** ${qualityEmoji[result.data_quality] || '❓'} ${result.data_quality}\n\n`;
+  }
+  
+  // Issues found
+  if (result.issues_found && result.issues_found.length > 0) {
+    content += `**Issues Found:**\n${result.issues_found.map(issue => `- ${issue}`).join('\n')}\n\n`;
+  }
+  
+  // Suggestions
+  if (result.suggestions && result.suggestions.length > 0) {
+    content += `**Suggestions:**\n${result.suggestions.map(suggestion => `- ${suggestion}`).join('\n')}\n\n`;
+  }
+  
+  // Explanation
+  if (result.explanation) {
+    content += `**Analysis:**\n${result.explanation}\n\n`;
+  }
+  
+  // Iteration info
+  if (result.iteration) {
+    content += `**Iteration:** ${result.iteration}\n\n`;
+  }
+  
+  // Suggested query
+  if (result.suggested_query) {
+    content += `**Improved Query:**\n\`\`\`graphql\n${result.suggested_query}\n\`\`\`\n\n`;
+  }
+  
+  // Error handling
+  if (result.error) {
+    content += `**Error:** ${result.error}\n\n`;
+  }
+  
+  if (result.status === 'failed') {
+    content += `**Status:** ❌ Failed\n\n`;
+  } else if (result.status === 'skipped') {
+    content += `**Status:** ⏭️ Skipped - ${result.reason || 'No reason provided'}\n\n`;
+  }
+  
+  return content;
+}
+
+function formatAgentResult(result) {
+  if (!result) return 'No result available';
   return `<pre>${JSON.stringify(result, null, 2)}</pre>`;
 }
 </script>

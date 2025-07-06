@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from beanie import Document
-from pydantic import Field, EmailStr
+from pydantic import Field
 from bson import ObjectId
 
 from .base import BaseDocument
@@ -14,7 +14,6 @@ class User(BaseDocument):
     
     # User identification
     username: str = Field(..., min_length=3, max_length=50, description="Unique username")
-    email: EmailStr = Field(..., description="User email address")
     
     # Authentication
     hashed_password: str = Field(..., description="Hashed password")
@@ -45,13 +44,12 @@ class User(BaseDocument):
         name = "users"
         indexes = [
             [("username", 1)],  # unique in MongoDB init script
-            [("email", 1)],     # unique in MongoDB init script
             "uuid",
             "created_at"
         ]
 
     def __repr__(self):
-        return f"<User(username='{self.username}', email='{self.email}')>"
+        return f"<User(username='{self.username}')>"
 
 
 class UserSession(BaseDocument):

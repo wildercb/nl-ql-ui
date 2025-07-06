@@ -1,19 +1,26 @@
 <template>
   <div class="h-full flex flex-col bg-gray-800 rounded-none border border-gray-700">
     <!-- Header -->
-    <div class="px-4 py-2 border-b border-gray-700">
+    <div class="px-4 py-2 border-b border-gray-700 flex items-center">
       <h3 class="text-md font-semibold text-gray-200">{{ title || 'Agent Stream' }}</h3>
+      <button
+        class="ml-auto text-xs px-3 py-1 rounded-md transition-colors duration-200 focus:outline-none"
+        :class="showPrompts ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
+        @click="togglePrompts"
+      >
+        <i class="fas fa-code mr-1" />{{ showPrompts ? 'Hide Prompts' : 'Show Prompts' }}
+      </button>
     </div>
     
     <!-- Messages -->
     <div ref="scrollArea" class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-      <div v-if="messages.length === 0" class="text-center text-gray-400 pt-8">
+      <div v-if="displayMessages.length === 0" class="text-center text-gray-400 pt-8">
         <i class="fas fa-comments text-4xl mb-2"></i>
         <p class="font-semibold">{{ title }}</p>
         <p class="text-sm">Enter a query below to start the conversation.</p>
       </div>
 
-      <div v-for="(msg, index) in messages" :key="index" class="w-full">
+      <div v-for="(msg, index) in displayMessages" :key="index" class="w-full">
         <!-- User Message -->
         <div v-if="msg.role === 'user'" class="flex items-end justify-end w-full">
           <div class="bg-blue-600 text-white p-3 rounded-lg w-full shadow-md break-words">
@@ -68,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { ref, watch, nextTick, computed } from 'vue';
 import { marked } from 'marked';
 
 interface Message {
@@ -84,6 +91,7 @@ const props = defineProps<{
   messages: Message[];
   loading: boolean;
   selectedModel?: string;
+  prompts?: any[];
 }>();
 
 const emit = defineEmits<{
@@ -93,6 +101,65 @@ const emit = defineEmits<{
 const scrollArea = ref<HTMLElement | null>(null);
 const chatInput = ref('');
 const isChatProcessing = ref(false);
+const showPrompts = ref(false);
+
+const togglePrompts = () => {
+  showPrompts.value = !showPrompts.value;
+  scrollToBottom();
+};
+
+// Build a mapping of agent → prompt message once prompts are available
+const promptMessagesByAgent = computed<Record<string, Message>>(() => {
+  if (!showPrompts.value || !props.prompts) return {};
+  const map: Record<string, Message> = {};
+  props.prompts.forEach((p: any) => {
+    let promptContent: string;
+    if (Array.isArray(p.prompt)) {
+      promptContent = p.prompt.map((m: any) => `${m.role}: ${m.content}`).join('\n');
+    } else {
+      promptContent = typeof p.prompt === 'object' ? JSON.stringify(p.prompt, null, 2) : String(p.prompt);
+    }
+    map[p.agent] = {
+      role: 'agent',
+      agent: `prompt → ${p.agent}`,
+      content: `\u0060\u0060\u0060\n${promptContent}\n\u0060\u0060\u0060`,
+      // Use p.timestamp if provided, else current time to preserve ordering roughly
+      timestamp: p.timestamp || new Date().toLocaleTimeString(),
+      isStreaming: false
+    } as Message;
+  });
+  return map;
+});
+
+// Interleave prompts directly before the first message of their agent
+const displayMessages = computed<Message[]>(() => {
+  if (!showPrompts.value) return props.messages;
+
+  const inserted = new Set<string>();
+  const result: Message[] = [];
+
+  props.messages.forEach((msg) => {
+    if (
+      msg.role === 'agent' &&
+      msg.agent &&
+      promptMessagesByAgent.value[msg.agent] &&
+      !inserted.has(msg.agent)
+    ) {
+      result.push(promptMessagesByAgent.value[msg.agent]);
+      inserted.add(msg.agent);
+    }
+    result.push(msg);
+  });
+
+  // In case some prompts have no corresponding agent messages yet (e.g., translator prompt before response)
+  Object.keys(promptMessagesByAgent.value).forEach((agent) => {
+    if (!inserted.has(agent)) {
+      result.push(promptMessagesByAgent.value[agent]);
+    }
+  });
+
+  return result;
+});
 
 const scrollToBottom = () => {
   nextTick(() => {
@@ -133,11 +200,15 @@ const getAgentIcon = (agentName?: string) => {
     translator: 'fas fa-language',
     reviewer: 'fas fa-check-double',
     optimizer: 'fas fa-bolt',
-    system: 'fas fa-cogs'
+    system: 'fas fa-cogs',
+    prompt: 'far fa-file-alt'
   };
+  if (agentName && agentName.startsWith('prompt')) return icons['prompt'];
   return icons[agentName || 'system'] || 'fas fa-robot';
 };
 
+watch(() => props.prompts, scrollToBottom, { deep: true });
+watch(showPrompts, scrollToBottom);
 watch(() => props.messages, scrollToBottom, { deep: true });
 watch(() => props.loading, scrollToBottom);
 

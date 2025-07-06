@@ -1,0 +1,59 @@
+# ---------------------------------------------------------------------------
+# Global .gitignore for the MPPW-MCP monorepo (Python backend + Vue frontend)
+# ---------------------------------------------------------------------------
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.dylib
+
+# Distributions / metadata
+build/
+dist/
+.eggs/
+*.egg
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Unit-test artefacts
+.pytest_cache/
+.tox/
+coverage/
+htmlcov/
+
+# === Node / Front-end ===
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.output/
+frontend/.nuxt/
+
+# === Environment & secrets ===
+*.env
+*.env.*
+config/*.env
+
+# === Logs & runtime ===
+*.log
+logs/
+backend/logs/
+
+# === IDE / Editor ===
+.vscode/
+.idea/
+
+# === OS / Misc ===
+.DS_Store
+Thumbs.db
+
+# === Docker & Compose generated ===
+*.pid
+
+# === Others ===
+**/__pypackages__/ 

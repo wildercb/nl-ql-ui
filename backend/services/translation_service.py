@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 
-from services.ollama_service import OllamaService
 from config.settings import get_settings
 from models.translation import TranslationResult
 from config.icl_examples import get_initial_icl_examples
+from services.llm_factory import resolve_llm
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,6 @@ class TranslationService:
 
     def __init__(self):
         self.settings = get_settings()
-        self.ollama_service = OllamaService()
         
     async def _broadcast_interaction(
         self,
@@ -223,10 +222,14 @@ Remember to return only the JSON object with the specified structure."""
 
         full_response_text = ""
         try:
-            logger.info(f"🦙 Starting Ollama chat completion with model: {model}")
-            stream = self.ollama_service.stream_chat_completion(
+            # Determine provider dynamically
+            service, provider, stripped_model = resolve_llm(model)
+
+            logger.info(f"🔮 Starting {provider} chat completion with model: {stripped_model}")
+
+            stream = service.stream_chat_completion(
                 messages=messages,
-                model=model,
+                model=stripped_model,
                 temperature=0.3,
                 max_tokens=2048
             )
@@ -236,7 +239,7 @@ Remember to return only the JSON object with the specified structure."""
                     full_response_text += token
                     yield {"event": "agent_token", "token": token}
             
-            logger.info(f"🦙 Ollama chat completion completed with model: {model}")
+            logger.info(f"🔮 {provider} chat completion completed with model: {stripped_model}")
             
             # Final processing after stream is complete
             result_data = self._extract_json_from_response(full_response_text)
@@ -299,11 +302,11 @@ async def chat_with_model(query: str, model: str, context: List[Dict[str, Any]])
     A simple chat interface for direct interaction with an Ollama model.
     This is useful for debugging, testing prompts, or direct model interaction.
     """
-    service = OllamaService()
+    service, _provider, stripped_model = resolve_llm(model)
     try:
         response = await service.chat_completion(
             messages=context + [{"role": "user", "content": query}],
-            model=model or service.default_model
+            model=stripped_model
         )
         return response.text
     except Exception as e:

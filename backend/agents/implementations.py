@@ -8,6 +8,7 @@ the existing MPPW-MCP services while using the new sophisticated framework.
 import asyncio
 import logging
 import time
+import json
 from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent, AgentContext, AgentCapability, AgentMetadata
@@ -194,35 +195,47 @@ class TranslatorAgent(BaseAgent):
                 optimization=ContextOptimization.PRIORITIZE
             )
             
-            # Call existing translation service with enhanced context
-            translation_result = await self.translation_service.translate_to_graphql(
+            # Get translation result from streaming service
+            translation_result = None
+            translation_stream = self.translation_service.translate_to_graphql(
                 natural_query=query_to_translate,
                 model=model,
-                schema_context=ctx.schema_context,
-                icl_examples=self._prepare_examples(ctx.examples)
+                schema_context=ctx.schema_context or "",
+                icl_examples=[ex if isinstance(ex, str) else json.dumps(ex) for ex in (ctx.examples or [])]
             )
             
+            async for event in translation_stream:
+                if event.get('event') == 'translation_complete':
+                    translation_result = event.get('result')
+                    break
+            
+            if not translation_result:
+                raise Exception("Translation service did not return a result")
+            
+            if not isinstance(translation_result, dict):
+                raise Exception(f"Translation service returned invalid result type: {type(translation_result)}")
+            
             # Store result in context
-            ctx.graphql_query = translation_result.graphql_query
+            ctx.graphql_query = translation_result.get('graphql_query', '')
             ctx.add_agent_output(
                 self.name,
                 {
-                    'graphql_query': translation_result.graphql_query,
-                    'confidence': translation_result.confidence,
-                    'explanation': translation_result.explanation,
-                    'warnings': translation_result.warnings,
-                    'suggestions': translation_result.suggested_improvements
+                    'graphql_query': translation_result.get('graphql_query', ''),
+                    'confidence': translation_result.get('confidence', 0.0),
+                    'explanation': translation_result.get('explanation', ''),
+                    'warnings': translation_result.get('warnings', []),
+                    'suggestions': translation_result.get('suggestions', [])
                 },
                 {
                     'processing_time': time.time() - start_time,
                     'model_used': model,
                     'query_length': len(query_to_translate),
-                    'graphql_length': len(translation_result.graphql_query or ''),
-                    'confidence': translation_result.confidence
+                    'graphql_length': len(translation_result.get('graphql_query', '')),
+                    'confidence': translation_result.get('confidence', 0.0)
                 }
             )
             
-            logger.info(f"✅ Translator: Generated GraphQL with confidence {translation_result.confidence}")
+            logger.info(f"✅ Translator: Generated GraphQL with confidence {translation_result.get('confidence', 0.0)}")
             
         except Exception as e:
             logger.error(f"❌ Translator failed: {e}")
@@ -491,4 +504,308 @@ class OptimizerAgent(BaseAgent):
         if len(improvements) > 0:
             return f"{len(improvements) * 15}%"  # Rough estimate
         
-        return "5%" 
+        return "5%"
+
+
+@agent(
+    name="data_reviewer_agent",
+    capabilities=[AgentCapability.REVIEW, AgentCapability.VALIDATE],
+    depends_on=["translator_agent"],
+    description="Reviews actual data results and iteratively refines queries until satisfied with accuracy"
+)
+class DataReviewerAgent(BaseAgent):
+    """
+    Advanced agent that reviews actual data results from GraphQL queries.
+    
+    Capabilities:
+    - Analyzes returned data for accuracy against original intent
+    - Handles multimodal data (images, documents, etc.)
+    - Iteratively refines queries until satisfied
+    - Provides streaming feedback and query suggestions
+    """
+    
+    def __init__(self):
+        super().__init__()
+        self.ollama_service = OllamaService()
+        self.max_iterations = 3
+        self.current_iteration = 0
+        
+    async def run(self, context: AgentContext, config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute data review with iterative refinement.
+        
+        Args:
+            context: Agent execution context with query and data
+            config: Configuration including model selection
+            
+        Returns:
+            Dict containing review results and optional query suggestions
+        """
+        model = config.get('model', 'gemma3:4b')
+        
+        # Check if we have a GraphQL query to work with
+        if not context.graphql_query:
+            logger.warning("No GraphQL query available for data review")
+            return {
+                'status': 'skipped',
+                'reason': 'No GraphQL query provided',
+                'satisfied': False
+            }
+        
+        logger.info(f"🔍 Starting data review with model: {model}")
+        
+        # Execute the GraphQL query to get actual data
+        query_result = await self._execute_graphql_query(context.graphql_query)
+        
+        # Analyze the data against the original intent
+        analysis_result = await self._analyze_data_accuracy(
+            original_query=context.original_query,
+            graphql_query=context.graphql_query,
+            data_result=query_result,
+            model=model
+        )
+        
+        # If not satisfied and we have iterations left, suggest improvements
+        if not analysis_result.get('satisfied', False) and self.current_iteration < self.max_iterations:
+            self.current_iteration += 1
+            logger.info(f"🔄 Data review iteration {self.current_iteration}/{self.max_iterations}")
+            
+            # Generate improved query
+            improved_query = await self._generate_improved_query(
+                original_query=context.original_query,
+                current_query=context.graphql_query,
+                analysis_result=analysis_result,
+                model=model,
+                schema_context=context.schema_context or "",
+                examples=[ex if isinstance(ex, str) else json.dumps(ex) for ex in (context.examples or [])]
+            )
+            
+            if improved_query:
+                analysis_result['suggested_query'] = improved_query
+                analysis_result['iteration'] = self.current_iteration
+                logger.info(f"✨ Data reviewer suggests new query: {improved_query[:100]}...")
+        
+        return analysis_result
+    
+    async def _execute_graphql_query(self, graphql_query: str) -> Dict[str, Any]:
+        """Execute GraphQL query and return results with error handling"""
+        try:
+            # Use existing data query service
+            from services.data_query_service import DataQueryService
+            
+            service = DataQueryService()
+            data = await service.run_query(graphql_query)
+            
+            return {
+                'success': True,
+                'data': data,
+                'errors': []
+            }
+                    
+        except Exception as e:
+            logger.error(f"GraphQL query execution failed: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'data': None,
+                'errors': [f"Execution error: {str(e)}"]
+            }
+    
+    async def _analyze_data_accuracy(
+        self, 
+        original_query: str, 
+        graphql_query: str, 
+        data_result: Dict[str, Any], 
+        model: str
+    ) -> Dict[str, Any]:
+        """Analyze if the returned data matches the original intent"""
+        
+        # Create analysis prompt
+        prompt = f"""You are a data accuracy reviewer. Analyze if the GraphQL query results match the user's original intent.
+
+Original User Query: "{original_query}"
+GraphQL Query Executed: {graphql_query}
+
+Query Results:
+Success: {data_result.get('success', False)}
+Data: {json.dumps(data_result.get('data'), indent=2) if data_result.get('data') else 'No data returned'}
+Errors: {data_result.get('errors', [])}
+
+Analyze the results and respond in JSON format:
+{{
+    "satisfied": true/false,
+    "accuracy_score": 0-10,
+    "issues_found": ["list of issues"],
+    "data_quality": "excellent/good/poor/failed",
+    "suggestions": ["list of improvement suggestions"],
+    "explanation": "detailed explanation of your analysis"
+}}
+
+Consider:
+1. Does the data actually answer the user's question?
+2. Are there any errors or missing data?
+3. Is the query structure appropriate for the intent?
+4. Are there obvious improvements that could be made?
+"""
+
+        try:
+            # Get analysis from model
+            messages = [{"role": "user", "content": prompt}]
+            
+            response_text = ""
+            async for chunk in self.ollama_service.stream_chat_completion(
+                model=model,
+                messages=messages,
+                temperature=0.3
+            ):
+                if chunk.get('done', False):
+                    break
+                response_text += chunk.get('message', {}).get('content', '')
+            
+            # Parse JSON response
+            analysis = self._extract_json(response_text)
+            
+            # Attach the prompt used for visibility in UI
+            analysis['prompt'] = messages
+            
+            # Ensure required fields
+            if not isinstance(analysis, dict):
+                analysis = {
+                    'satisfied': False,
+                    'accuracy_score': 0,
+                    'issues_found': ['Failed to parse analysis'],
+                    'data_quality': 'failed',
+                    'suggestions': ['Try a different approach'],
+                    'explanation': 'Analysis parsing failed'
+                }
+            
+            # Add query execution results
+            analysis['query_result'] = data_result
+            analysis['original_query'] = original_query
+            analysis['graphql_query'] = graphql_query
+            
+            return analysis
+            
+        except Exception as e:
+            logger.error(f"Data accuracy analysis failed: {e}")
+            return {
+                'satisfied': False,
+                'accuracy_score': 0,
+                'issues_found': [f'Analysis failed: {str(e)}'],
+                'data_quality': 'failed',
+                'suggestions': ['Check model availability and try again'],
+                'explanation': f'Analysis failed due to error: {str(e)}',
+                'query_result': data_result,
+                'original_query': original_query,
+                'graphql_query': graphql_query
+            }
+    
+    async def _generate_improved_query(
+        self,
+        original_query: str,
+        current_query: str,
+        analysis_result: Dict[str, Any],
+        model: str,
+        schema_context: str = "",
+        examples: Optional[List[str]] = None
+    ) -> Optional[str]:
+        """Generate an improved GraphQL query based on analysis"""
+        
+        issues = analysis_result.get('issues_found', [])
+        suggestions = analysis_result.get('suggestions', [])
+        
+        if not issues and not suggestions:
+            return None
+        
+        examples_section = ""
+        if examples:
+            examples_section = "\n\nHere are example GraphQL translations for this data. Use them for inspiration if helpful:\n" + "\n".join(examples[:3])
+
+        schema_section = ""
+        if schema_context:
+            schema_section = f"\n\nGraphQL Schema (SDL):\n```graphql\n{schema_context[:4000]}\n```"
+
+        prompt = f"""You are a GraphQL query improvement specialist. Based on the analysis of a failed or suboptimal query, generate a better GraphQL query.{schema_section}{examples_section}
+            
+Generate an improved GraphQL query that addresses the issues described below.
+
+Original User Intent: "{original_query}"
+Current GraphQL Query: {current_query}
+
+Analysis Results:
+- Satisfied: {analysis_result.get('satisfied', False)}
+- Accuracy Score: {analysis_result.get('accuracy_score', 0)}/10
+- Issues Found: {issues}
+- Suggestions: {suggestions}
+- Data Quality: {analysis_result.get('data_quality', 'unknown')}
+
+Query Execution Results:
+{json.dumps(analysis_result.get('query_result', {}), indent=2)}
+
+Return ONLY the improved GraphQL query, no explanation:"""
+
+        try:
+            messages = [{"role": "user", "content": prompt}]
+            
+            response_text = ""
+            async for chunk in self.ollama_service.stream_chat_completion(
+                model=model,
+                messages=messages,
+                temperature=0.1  # Lower temperature for more precise queries
+            ):
+                if chunk.get('done', False):
+                    break
+                response_text += chunk.get('message', {}).get('content', '')
+            
+            # Clean up the response to extract just the GraphQL query
+            improved_query = response_text.strip()
+            
+            # Basic validation - should start with { and end with }
+            if improved_query.startswith('{') and improved_query.endswith('}'):
+                return improved_query
+            else:
+                # Try to extract GraphQL from the response
+                lines = improved_query.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('{') and line.endswith('}'):
+                        return line
+                
+                # If no valid query found, return None
+                logger.warning("Could not extract valid GraphQL query from improvement response")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Query improvement generation failed: {e}")
+            return None
+    
+    def _extract_json(self, text: str) -> Dict[str, Any]:
+        """Extract JSON from text response"""
+        try:
+            # Try to find JSON block
+            start = text.find('{')
+            if start == -1:
+                return {}
+            
+            # Find matching closing brace
+            brace_count = 0
+            end = -1
+            for i, char in enumerate(text[start:]):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end = start + i + 1
+                        break
+            
+            if end == -1:
+                return {}
+            
+            json_str = text[start:end]
+            return json.loads(json_str)
+            
+        except json.JSONDecodeError:
+            return {}
+        except Exception:
+            return {} 

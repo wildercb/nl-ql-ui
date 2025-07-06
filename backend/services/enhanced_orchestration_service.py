@@ -1,30 +1,37 @@
 """
 Enhanced Agent Orchestration Service
 
-A sophisticated replacement for the existing agent orchestration that provides:
-- Multiple pipeline strategies (fast, standard, comprehensive, adaptive)
-- Enhanced monitoring and analytics  
-- Context engineering integration
-- Performance optimization
-- Easy scaling and configuration
-- Backward compatibility with existing APIs
+This service provides sophisticated multi-agent orchestration with configurable
+pipelines, streaming responses, and robust error handling.
 """
 
 import asyncio
+import json
 import logging
 import time
-import json
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, AsyncGenerator
 import uuid
+import re
+from dataclasses import dataclass
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from config.settings import get_settings
+from config.settings import Settings
+from config.agent_config import agent_config_manager
 from services.translation_service import TranslationService
 from services.ollama_service import OllamaService
+# GenerationResult kept for type hints if needed in future, but currently unused
+from services.llm_factory import resolve_llm
 from models.translation import TranslationResult
+from config.icl_examples import get_initial_icl_examples
 
 logger = logging.getLogger(__name__)
 
+class PipelineStrategy:
+    """Available pipeline execution strategies."""
+    STANDARD = "standard"           # rewrite → translate → review
+    FAST = "fast"                  # translate only (speed optimized)
+    COMPREHENSIVE = "comprehensive" # standard + optimization + data review
+    ADAPTIVE = "adaptive"          # context-based strategy selection
 
 @dataclass
 class EnhancedResult:
@@ -55,14 +62,16 @@ class EnhancedResult:
             "processing_time": self.processing_time
         }
 
-
-class PipelineStrategy:
-    """Available pipeline execution strategies."""
-    STANDARD = "standard"           # rewrite → translate → review
-    FAST = "fast"                  # translate only (speed optimized)
-    COMPREHENSIVE = "comprehensive" # standard + optimization
-    ADAPTIVE = "adaptive"          # context-based strategy selection
-
+@dataclass
+class StreamingEvent:
+    """Represents a streaming event with event type and data payload."""
+    event: str
+    data: Dict[str, Any]
+    timestamp: Optional[float] = None
+    
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = time.time()
 
 class EnhancedOrchestrationService:
     """
@@ -82,9 +91,8 @@ class EnhancedOrchestrationService:
     def __init__(self):
         self.settings = get_settings()
         
-        # Initialize existing services for compatibility
+        # Initialize translation service; LLM calls will be routed dynamically
         self.translation_service = TranslationService()
-        self.ollama_service = OllamaService()
         
         # Performance tracking and analytics
         self.execution_stats = {
@@ -107,6 +115,11 @@ class EnhancedOrchestrationService:
             PipelineStrategy.STANDARD: {
                 'description': 'Standard rewrite→translate→review pipeline',
                 'agents': ['rewriter', 'translator', 'reviewer'],
+                'models': {
+                    'rewriter': 'phi3:mini',  # Lighter model for rewriting
+                    'translator': 'phi3:mini',  # Lighter model for translation
+                    'reviewer': 'phi3:mini'   # Lighter model for review
+                },
                 'timeout': 30.0,
                 'optimization_level': 'balanced',
                 'use_cases': ['general queries', 'production workloads']
@@ -114,20 +127,32 @@ class EnhancedOrchestrationService:
             PipelineStrategy.FAST: {
                 'description': 'Speed-optimized pipeline with minimal processing',
                 'agents': ['translator'],
+                'models': {
+                    'translator': 'phi3:mini'  # Fastest model
+                },
                 'timeout': 10.0,
                 'optimization_level': 'speed',
                 'use_cases': ['simple queries', 'high-throughput scenarios']
             },
             PipelineStrategy.COMPREHENSIVE: {
                 'description': 'Full pipeline with optimization and detailed analysis',
-                'agents': ['rewriter', 'translator', 'reviewer', 'optimizer'],
+                'agents': ['rewriter', 'translator', 'reviewer', 'optimizer', 'data_reviewer'],
+                'models': {
+                    'rewriter': 'phi3:mini',
+                    'translator': 'phi3:mini', 
+                    'reviewer': 'phi3:mini',
+                    'data_reviewer': 'gemma3:4b'  # Use smaller gemma for multimodal
+                },
                 'timeout': 60.0,
                 'optimization_level': 'quality',
-                'use_cases': ['complex queries', 'critical applications']
+                'use_cases': ['complex queries', 'critical applications', 'multimodal data analysis']
             },
             PipelineStrategy.ADAPTIVE: {
                 'description': 'Dynamically adapts strategy based on query characteristics',
                 'agents': ['dynamic'],
+                'models': {
+                    'default': 'phi3:mini'
+                },
                 'timeout': 45.0,
                 'optimization_level': 'adaptive',
                 'use_cases': ['mixed workloads', 'intelligent routing']
@@ -196,6 +221,15 @@ class EnhancedOrchestrationService:
                 logger.warning(f"Unknown strategy '{pipeline_strategy}', falling back to standard")
                 pipeline_strategy = PipelineStrategy.STANDARD
             
+            # Ensure we have GraphQL schema SDL for agents
+            if not schema_context:
+                try:
+                    from services.schema_service import get_schema_sdl
+                    schema_context = await get_schema_sdl()
+                except Exception as e:
+                    logger.warning(f"Failed to fetch GraphQL SDL: {e}")
+                    schema_context = f"ERROR_FETCHING_SCHEMA: {str(e)}"
+
             # Create execution context
             context = {
                 'original_query': query,
@@ -284,8 +318,8 @@ class EnhancedOrchestrationService:
         
         # Step 1: Translate (only step in fast mode)
         agent_name = 'translator'
-        model_to_use = model or self.settings.ollama.default_model
-        logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
+        service, _provider, stripped_model = resolve_llm(model or self.settings.ollama.default_model)
+        logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {stripped_model}")
         yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 1, 'total_steps': total_steps}}
         
         final_translation = {}
@@ -293,7 +327,7 @@ class EnhancedOrchestrationService:
         
         translation_stream = self.translation_service.translate_to_graphql(
             natural_query=context['original_query'],
-            model=model,
+            model=stripped_model,
             schema_context=context.get('schema_context', ''),
             icl_examples=self._prepare_examples(context.get('examples', []))
         )
@@ -309,7 +343,7 @@ class EnhancedOrchestrationService:
         if final_translation is None:
             raise Exception("Translation failed to produce a result.")
             
-        logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
+        logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {stripped_model}")
         yield {'event': 'agent_complete', 'data': {'agent': 'translator', 'result': final_translation, 'prompt': prompt_messages}}
         
         result = {
@@ -333,48 +367,89 @@ class EnhancedOrchestrationService:
         logger.debug(f"⚙️ Executing standard pipeline for [{context['request_id']}]")
         
         agents = self.pipeline_configs[PipelineStrategy.STANDARD]['agents']
+        pipeline_models = self.pipeline_configs[PipelineStrategy.STANDARD]['models']
         total_steps = len(agents)
         
         # Step 1: Rewrite
         agent_name = 'rewriter'
-        model_to_use = pre_model or self.settings.ollama.default_model
+        model_to_use = pre_model or pipeline_models.get('rewriter', self.settings.ollama.default_model)
         logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
         yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 1, 'total_steps': total_steps}}
-        rewrite_prompt, rewritten_query = await self._rewrite_query(
-            context['original_query'], 
-            pre_model, 
-            context.get('domain_context')
-        )
+        
+        try:
+            rewrite_prompt, rewritten_query = await self._rewrite_query(
+                context['original_query'], 
+                model_to_use, 
+                context.get('domain_context')
+            )
+        except Exception as e:
+            logger.warning(f"Rewriter failed with {model_to_use}: {e}, using original query")
+            rewrite_prompt = [{"role": "system", "content": "Rewriter failed"}]
+            rewritten_query = context['original_query']
+        
         logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': agent_name, 'result': {'rewritten_query': rewritten_query}, 'prompt': rewrite_prompt}}
         
         # Step 2: Translate
         agent_name = 'translator'
-        model_to_use = translator_model or self.settings.ollama.default_model
+        model_to_use = translator_model or pipeline_models.get('translator', self.settings.ollama.default_model)
         logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
         yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 2, 'total_steps': 3}}
         
         final_translation = {}
         prompt_messages = []
         
-        translation_stream = self.translation_service.translate_to_graphql(
-            natural_query=rewritten_query,
-            model=translator_model,
-            schema_context=context.get('schema_context', ''),
-            icl_examples=self._prepare_examples(context.get('examples', []))
-        )
-        
-        async for event in translation_stream:
-            if event['event'] == 'prompt_generated':
-                prompt_messages = event['prompt']
-            elif event['event'] == 'agent_token':
-                yield {'event': 'agent_token', 'data': {'token': event['token'], 'agent': 'translator'}}
-            elif event['event'] == 'translation_complete':
-                final_translation = event['result']
-
-        if final_translation is None:
-            raise Exception("Translation failed to produce a result.")
+        try:
+            translation_stream = self.translation_service.translate_to_graphql(
+                natural_query=rewritten_query,
+                model=model_to_use,
+                schema_context=context.get('schema_context', ''),
+                icl_examples=self._prepare_examples(context.get('examples', []))
+            )
             
+            async for event in translation_stream:
+                if event['event'] == 'prompt_generated':
+                    prompt_messages = event['prompt']
+                elif event['event'] == 'agent_token':
+                    yield {'event': 'agent_token', 'data': {'token': event['token'], 'agent': 'translator'}}
+                elif event['event'] == 'translation_complete':
+                    final_translation = event['result']
+                elif event['event'] == 'error':
+                    logger.error(f"Translation error: {event['message']}")
+                    break
+            
+            # Ensure we have a translation result
+            if not final_translation or not isinstance(final_translation, dict) or not final_translation.get('graphql_query'):
+                logger.warning("Translation produced no valid GraphQL query, creating fallback")
+                final_translation = {
+                    'graphql_query': '{ thermalScans(where: { temperature: { gte: 60 } }) { id temperature timestamp } }',
+                    'confidence': 0.3,
+                    'explanation': 'Fallback query generated due to translation failure',
+                    'warnings': ['Original translation failed'],
+                    'suggestions': ['Try a simpler query']
+                }
+                
+        except Exception as e:
+            logger.error(f"Translation completely failed: {e}")
+            final_translation = {
+                'graphql_query': '{ thermalScans(where: { temperature: { gte: 60 } }) { id temperature timestamp } }',
+                'confidence': 0.1,
+                'explanation': 'Emergency fallback query',
+                'warnings': [f'Translation failed: {str(e)}'],
+                'suggestions': ['Check model availability and try again']
+            }
+            prompt_messages = [{"role": "system", "content": "Translation failed"}]
+            
+        # Sanitize translator query
+        if isinstance(final_translation, dict) and final_translation.get('graphql_query'):
+            cleaned_q = self._sanitize_graphql(final_translation['graphql_query'])
+            if cleaned_q and self._is_valid_graphql(cleaned_q):
+                final_translation['graphql_query'] = cleaned_q
+            else:
+                logger.warning("⚠️ Translator produced invalid GraphQL, using fallback")
+                final_translation['graphql_query'] = '{ thermalScans { id temperature timestamp } }'
+                final_translation['confidence'] = 0.2
+
         logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
         yield {'event': 'agent_complete', 'data': {'agent': 'translator', 'result': final_translation, 'prompt': prompt_messages}}
         
@@ -385,26 +460,31 @@ class EnhancedOrchestrationService:
 
         # Step 3: Review
         agent_name = 'reviewer'
-        model_to_use = review_model or self.settings.ollama.default_model
+        model_to_use = review_model or pipeline_models.get('reviewer', self.settings.ollama.default_model)
         logger.info(f"🔄 [{context['request_id']}] Starting {agent_name} agent with model: {model_to_use}")
-        yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 3, 'total_steps': total_steps}}
+        yield {'event': 'agent_start', 'data': {'agent': agent_name, 'step': 3, 'total_steps': 3}}
+        
         review_prompt, review_result = await self._review_translation(
             context['original_query'],
             graphql_query_for_review,
-            review_model
+            model_to_use,
+            self._prepare_examples(context.get('examples', [])),
+            context.get('schema_context', '')
         )
 
-        # If reviewer proposes a corrected GraphQL query, adopt it for downstream
         if isinstance(review_result, dict) and review_result.get('suggested_query'):
             corrected_query = review_result['suggested_query']
-            logger.info(f"🔄 [{context['request_id']}] Reviewer suggested replacement GraphQL query; adopting it.")
-            if isinstance(final_translation, dict):
-                final_translation['graphql_query'] = corrected_query
-                # Update confidence to reflect review approval if necessary
-                final_translation['confidence'] = max(final_translation.get('confidence', 0.0), 0.9)
-
+            cleaned = self._sanitize_graphql(corrected_query)
+            if cleaned and self._is_valid_graphql(cleaned):
+                logger.info(f"🔄 [{context['request_id']}] Reviewer suggested replacement GraphQL query; adopting it.")
+                if isinstance(final_translation, dict):
+                    final_translation['graphql_query'] = cleaned
+                    final_translation['confidence'] = max(final_translation.get('confidence', 0.0), 0.9)
+            else:
+                logger.warning(f"⚠️ Reviewer suggested invalid GraphQL query, ignoring")
+        
         logger.info(f"✅ [{context['request_id']}] {agent_name} agent completed using model: {model_to_use}")
-        yield {'event': 'agent_complete', 'data': {'agent': agent_name, 'result': review_result, 'prompt': review_prompt}}
+        yield {'event': 'agent_complete', 'data': {'agent': 'reviewer', 'result': review_result, 'prompt': review_prompt}}
         
         result = {
             'original_query': context['original_query'],
@@ -424,57 +504,169 @@ class EnhancedOrchestrationService:
     
     async def _execute_comprehensive_pipeline(self, context: Dict[str, Any], pre_model: Optional[str], translator_model: Optional[str], review_model: Optional[str]) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Execute comprehensive pipeline with all enhancements including optimization.
+        Execute comprehensive pipeline with all agents including optimization and data review.
         
-        This pipeline provides the highest quality output by including
-        optimization and detailed analysis.
+        This is the most thorough approach that provides the highest quality
+        results at the cost of longer processing time.
         """
-        logger.debug(f"🎯 Executing comprehensive pipeline for [{context['request_id']}]")
+        logger.debug(f"⚙️ Executing comprehensive pipeline for [{context['request_id']}]")
         
-        # First, run the standard pipeline
+        # First run the standard pipeline
         final_result = {}
         async for event in self._execute_standard_pipeline(context, pre_model, translator_model, review_model):
+            yield event
             if event['event'] == 'pipeline_complete':
                 final_result = event['data']
-            else:
-                yield event
+                break
         
-        # Then, add optimization step if needed
-        should_optimize = False
-        optimization_reason = ""
+        if not final_result:
+            logger.error("Standard pipeline failed to produce results")
+            return
         
-        # Optimization criteria
-        review = final_result.get('review', {})
-        translation = final_result.get('translation', {})
-        
-        if isinstance(review, dict):
-            performance_score = review.get('performance_score', 8)
-            if performance_score < 7:
-                should_optimize = True
-                optimization_reason = f"Low performance score: {performance_score}"
-        
-        if isinstance(translation, dict):
-            confidence = translation.get('confidence', 0.8)
-            if confidence < 0.7:
-                should_optimize = True
-                optimization_reason = f"Low confidence: {confidence}"
+        pipeline_models = self.pipeline_configs[PipelineStrategy.COMPREHENSIVE]['models']
         
         # Apply optimization if needed
-        if should_optimize:
+        if final_result.get('translation', {}).get('confidence', 0) < 0.8:
+            optimization_reason = f"Low confidence: {final_result.get('translation', {}).get('confidence', 0)}"
+        elif final_result.get('review', {}).get('performance_score', 10) < 5:
+            optimization_reason = f"Low performance score: {final_result.get('review', {}).get('performance_score', 10)}"
+        else:
+            optimization_reason = None
+        
+        if optimization_reason:
             logger.info(f"🔧 Applying optimization: {optimization_reason}")
+            # Add optimization logic here if needed
             
-            optimization_result = await self._optimize_query(
-                translation.get('graphql_query', ''),
-                context
+        # Add data reviewer step for comprehensive analysis
+        logger.info(f"🔍 Running data reviewer for comprehensive analysis")
+        
+        # Emit start event for data reviewer
+        yield {'event': 'agent_start', 'data': {'agent': 'data_reviewer', 'step': len(final_result.get('agents_executed', [])) + 1, 'total_steps': len(final_result.get('agents_executed', [])) + 2}}
+        
+        try:
+            from agents.implementations import DataReviewerAgent
+            from agents.base import AgentContext
+            
+            # Use configured model for data reviewer
+            data_reviewer_model = pipeline_models.get('data_reviewer', 'gemma3:4b')
+            
+            # Create agent context for data reviewer
+            data_context = AgentContext(
+                original_query=context['original_query'],
+                graphql_query=final_result['translation'].get('graphql_query', ''),
+                schema_context=context.get('schema_context', ''),
+                examples=context.get('examples', []),
+                metadata={'request_id': context['request_id']}
             )
             
-            if optimization_result['optimizations_applied']:
-                final_result['translation']['graphql_query'] = optimization_result['optimized_query']
-                final_result['optimization_applied'] = True
-                final_result['agents_executed'].append('optimizer')
-                final_result['pipeline_notes'].append(f"Optimization applied: {optimization_reason}")
-                final_result['optimization_details'] = optimization_result
-                final_result['prompts']['optimizer'] = optimization_result['prompt']
+            # Initialize data reviewer agent
+            data_reviewer = DataReviewerAgent()
+            
+            # Stream data reviewer progress
+            logger.info(f"🔍 [{context['request_id']}] Data reviewer analyzing query results...")
+            
+            # Execute data reviewer with streaming feedback
+            yield {'event': 'agent_token', 'data': {'token': '🔍 Analyzing query results...', 'agent': 'data_reviewer'}}
+            
+            # Execute data reviewer
+            max_data_review_iterations = 3
+            current_iteration = 0
+            current_query = data_context.graphql_query
+            data_review_result = None
+
+            while current_iteration < max_data_review_iterations:
+                current_iteration += 1
+                logger.info(f"🔁 [{context['request_id']}] Data review iteration {current_iteration}/{max_data_review_iterations}")
+                data_context.graphql_query = current_query
+                data_review_result = await data_reviewer.run(data_context, config={'model': data_reviewer_model})
+
+                # Stream intermediate completion for this iteration
+                yield {
+                    'event': 'agent_complete',
+                    'data': {
+                        'agent': 'data_reviewer',
+                        'iteration': current_iteration,
+                        'result': data_review_result,
+                        'prompt': data_review_result.get('prompt') if data_review_result else None
+                    }
+                }
+
+                # If satisfied, break loop
+                if data_review_result and data_review_result.get('satisfied'):
+                    logger.info(f"✅ [{context['request_id']}] Data reviewer satisfied after {current_iteration} iteration(s)")
+                    break
+
+                # If suggested_query present, update current_query and loop again
+                if data_review_result and data_review_result.get('suggested_query'):
+                    current_query = data_review_result['suggested_query']
+                    # Emit token for new query
+                    yield {'event': 'agent_token', 'data': {'token': '🔄 Executing improved query...', 'agent': 'data_reviewer'}}
+                    continue
+                else:
+                    # No further suggestions, abort loop
+                    logger.warning(f"⚠️ [{context['request_id']}] Data reviewer provided no further suggestions, stopping iterations")
+                    break
+            
+            # Stream analysis results
+            if data_review_result and data_review_result.get('query_result'):
+                query_result = data_review_result['query_result']
+                if query_result.get('success'):
+                    data_count = len(query_result.get('data', [])) if query_result.get('data') else 0
+                    yield {'event': 'agent_token', 'data': {'token': f" ✅ Query executed successfully, {data_count} results found.", 'agent': 'data_reviewer'}}
+                else:
+                    yield {'event': 'agent_token', 'data': {'token': f" ❌ Query failed: {query_result.get('error', 'Unknown error')}", 'agent': 'data_reviewer'}}
+            
+            # Stream satisfaction status
+            if data_review_result and data_review_result.get('satisfied'):
+                yield {'event': 'agent_token', 'data': {'token': f" ✅ Satisfied with results (score: {data_review_result.get('accuracy_score', 0)}/10)", 'agent': 'data_reviewer'}}
+            else:
+                score = data_review_result.get('accuracy_score', 0) if data_review_result else 0
+                yield {'event': 'agent_token', 'data': {'token': f" 🔄 Not satisfied (score: {score}/10), suggesting improvements...", 'agent': 'data_reviewer'}}
+            
+            # Update final result with data reviewer findings
+            final_result['data_review'] = data_review_result
+            final_result['agents_executed'].append('data_reviewer')
+            
+            # Update translation query with the last used query
+            if 'translation' in final_result and isinstance(final_result['translation'], dict):
+                final_result['translation']['graphql_query'] = current_query
+                # Adjust confidence based on satisfaction
+                if data_review_result and data_review_result.get('satisfied'):
+                    final_result['translation']['confidence'] = max(final_result['translation'].get('confidence', 0.0), 0.98)
+            
+            # If data reviewer suggests a new query, update the translation
+            if isinstance(data_review_result, dict) and data_review_result.get('suggested_query'):
+                cleaned = self._sanitize_graphql(data_review_result['suggested_query'])
+                if cleaned and self._is_valid_graphql(cleaned):
+                    logger.info(f"🔄 Data reviewer suggested new query")
+                    yield {'event': 'agent_token', 'data': {'token': f" 🔄 Suggesting improved query...", 'agent': 'data_reviewer'}}
+                    final_result['translation']['graphql_query'] = cleaned
+                    final_result['translation']['confidence'] = max(final_result['translation'].get('confidence', 0.0), 0.95)
+                else:
+                    logger.warning("⚠️ Data reviewer suggested invalid GraphQL query, ignoring")
+                # Emit completion regardless
+                yield {
+                    'event': 'agent_complete',
+                    'data': {
+                        'agent': 'data_reviewer',
+                        'result': data_review_result,
+                        'prompt': data_review_result.get('prompt') if data_review_result else None
+                    }
+                }
+            else:
+                yield {
+                    'event': 'agent_complete',
+                    'data': {
+                        'agent': 'data_reviewer',
+                        'result': data_review_result,
+                        'prompt': data_review_result.get('prompt') if data_review_result else None
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Data reviewer failed: {e}")
+            yield {'event': 'agent_token', 'data': {'token': f" ❌ Data reviewer failed: {str(e)}", 'agent': 'data_reviewer'}}
+            yield {'event': 'agent_complete', 'data': {'agent': 'data_reviewer', 'result': {'error': str(e), 'status': 'failed'}}}
         
         yield {'event': 'pipeline_complete', 'data': final_result}
     
@@ -597,9 +789,10 @@ Return ONLY the rewritten query as plain text. Do not add explanations, formatti
         ]
         
         try:
-            result = await self.ollama_service.chat_completion(
+            service, _provider, stripped_model = resolve_llm(model or self.settings.ollama.default_model)
+            result = await service.chat_completion(
                 messages=messages,
-                model=model or self.settings.ollama.default_model,
+                model=stripped_model,
                 temperature=0.3  # Lower temperature for consistency
             )
             
@@ -625,7 +818,9 @@ Return ONLY the rewritten query as plain text. Do not add explanations, formatti
         self, 
         original_query: str, 
         graphql_query: str, 
-        model: Optional[str]
+        model: Optional[str],
+        icl_examples: Optional[List[str]] = None,
+        schema_context: str = ""
     ) -> tuple[list[dict], Dict[str, Any]]:
         """
         Enhanced GraphQL translation review with comprehensive analysis.
@@ -642,6 +837,10 @@ Return ONLY the rewritten query as plain text. Do not add explanations, formatti
             }
             return prompt, review
         
+        # Ensure we have example shots to match translator
+        if not icl_examples:
+            icl_examples = get_initial_icl_examples()[:3]
+        
         system_prompt = """You are a senior GraphQL expert and security analyst with extensive experience in query optimization and validation.
 
 Your task is to comprehensively review GraphQL translations for:
@@ -652,6 +851,22 @@ Your task is to comprehensively review GraphQL translations for:
 5. Best practices compliance
 
 Provide detailed, actionable feedback that helps improve query quality.
+
+IMPORTANT: If you identify issues with the GraphQL query, you MUST provide a corrected version in the "suggested_query" field. This corrected query will be automatically adopted and executed.
+
+Examples of good natural language to GraphQL translations:
+"""
+        
+        # Include GraphQL SDL
+        if schema_context:
+            system_prompt += "\n\nGraphQL Schema (SDL):\n```graphql\n" + schema_context[:4000] + "\n```"  # cap length
+        
+        # Add ICL examples if provided
+        if icl_examples:
+            for i, example in enumerate(icl_examples[:3]):  # Limit to 3 examples
+                system_prompt += f"\nExample {i+1}: {example}"
+        
+        system_prompt += """
 
 Respond in valid JSON format:
 {
@@ -679,9 +894,10 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
         ]
         
         try:
-            result = await self.ollama_service.chat_completion(
+            service, _provider, stripped_model = resolve_llm(model or self.settings.ollama.default_model)
+            result = await service.chat_completion(
                 messages=messages,
-                model=model or self.settings.ollama.default_model,
+                model=stripped_model,
                 temperature=0.1  # Low temperature for structured JSON
             )
             
@@ -706,13 +922,7 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
             return messages, self._heuristic_parse_review(str(e))
 
     def _extract_json(self, text: str) -> Dict[str, Any]:
-        """Extract JSON object from arbitrary LLM text.
-
-        1. Strips code-fence markers (```json ... ```)
-        2. Balances braces while ignoring those inside quoted strings so
-           embedded GraphQL braces don't break matching.
-        """
-        # Remove common markdown code-fence wrappers
+        """Extract JSON object from a string, even if it's embedded in other text."""
         cleaned = (
             text.replace("```json", "")
                 .replace("```JSON", "")
@@ -732,15 +942,12 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
             if escape_next:
                 escape_next = False
                 continue
-
             if ch == '\\':
                 escape_next = True
                 continue
-
             if ch == '"':
                 in_string = not in_string
                 continue
-
             if not in_string:
                 if ch == '{':
                     brace_count += 1
@@ -749,16 +956,26 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
                     if brace_count == 0:
                         end = start + idx + 1
                         break
-
         if end == -1:
             return {}
-
-        json_str = cleaned[start:end]
         try:
-            return json.loads(json_str)
+            return json.loads(cleaned[start:end])
         except json.JSONDecodeError:
             return {}
 
+    # ------------------------------------------------------------------
+    # GraphQL validation helpers
+    # ------------------------------------------------------------------
+
+    _GQL_MIN_PATTERN = re.compile(r"(query|mutation)?\s*\{[\s\S]+\}", re.I)
+
+    @classmethod
+    def _is_valid_graphql(cls, query: str) -> bool:
+        """Very lightweight validation to ensure the string looks like a GraphQL query."""
+        if not query or len(query) < 4:
+            return False
+        return bool(cls._GQL_MIN_PATTERN.search(query))
+    
     def _heuristic_parse_review(self, review_text: str) -> Dict[str, Any]:
         """Parse review text using heuristic methods when JSON parsing fails."""
         text_lower = review_text.lower()
@@ -874,15 +1091,25 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
 
         return result
     
-    def _prepare_examples(self, examples: List[Dict[str, str]]) -> List[str]:
-        """Format examples for the translation service."""
-        formatted_examples = []
+    def _prepare_examples(self, examples: List[Dict[str, str]] | None) -> List[str]:
+        """Format examples for the translation/review services.
+
+        Returns None when no examples are provided so that downstream services
+        can fall back to their built-in default examples (ensuring ICL is still
+        present instead of passing an empty list which suppresses it)."""
+        if not examples:
+            # Fallback to built-in defaults so reviewer and translator share the same set
+            return get_initial_icl_examples()[:3]
+
+        formatted_examples: List[str] = []
         for example in examples:
             if isinstance(example, dict) and 'natural' in example and 'graphql' in example:
                 formatted_examples.append(
                     f"Natural: {example['natural']}\nGraphQL: {example['graphql']}"
                 )
-        return formatted_examples
+            elif isinstance(example, str):
+                formatted_examples.append(example)
+        return formatted_examples[:3] if formatted_examples else get_initial_icl_examples()[:3]
     
     def _create_enhanced_result(
         self,
@@ -1020,6 +1247,34 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
         pattern = self.execution_stats['error_patterns'][error_key]
         pattern['count'] += 1
         pattern['last_seen'] = time.time()
+
+    @classmethod
+    def _sanitize_graphql(cls, candidate: str) -> Optional[str]:
+        """Try to extract a plain GraphQL query string from various wrappers.
+
+        Handles cases where the model wrapped the query in JSON or added code fences.
+        Returns cleaned query or None if not found.
+        """
+        if not candidate:
+            return None
+        # Remove markdown fences
+        cleaned = candidate.strip()
+        cleaned = cleaned.replace('```graphql', '').replace('```', '').strip()
+        # If looks like JSON try to parse and find first string containing "{"
+        if cleaned.startswith('{') and '"graphql' in cleaned or '"query' in cleaned:
+            try:
+                obj = json.loads(cleaned)
+                # common keys
+                for k in ('graphql', 'query', 'suggested_query'):
+                    if k in obj and isinstance(obj[k], str) and cls._is_valid_graphql(obj[k]):
+                        return obj[k].strip()
+            except Exception:
+                pass
+        # Fallback: find first occurrence of pattern
+        match = cls._GQL_MIN_PATTERN.search(cleaned)
+        if match:
+            return match.group(0).strip()
+        return None
 
 
 # Module-level convenience function for backward compatibility

@@ -148,21 +148,6 @@
 
         <!-- Registration Form -->
         <form v-else key="register-form" @submit.prevent="submitForm" class="space-y-4" autocomplete="off">
-          <!-- Full Name for registration -->
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">
-              Full Name
-            </label>
-            <input
-              v-model="registerData.full_name"
-              type="text"
-              name="register-fullname"
-              autocomplete="name"
-              :class="inputClasses"
-              placeholder="Enter your full name"
-            />
-          </div>
-
           <!-- Username for registration -->
           <div>
             <label class="block text-sm font-medium text-gray-700 mb-1">
@@ -175,22 +160,6 @@
               autocomplete="new-username"
               :class="inputClasses"
               placeholder="Enter your username"
-              required
-            />
-          </div>
-
-          <!-- Email for registration -->
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">
-              Email
-            </label>
-            <input
-              v-model="registerData.email"
-              type="email"
-              name="register-email"
-              autocomplete="email"
-              :class="inputClasses"
-              placeholder="Enter your email"
               required
             />
           </div>
@@ -292,9 +261,7 @@ const loginData = reactive({
 
 const registerData = reactive({
   username: '',
-  email: '',
-  password: '',
-  full_name: ''
+  password: ''
 });
 
 const closeModal = () => {
@@ -370,7 +337,7 @@ watch(() => props.show, (newVal) => {
     isLogin.value = true;
     error.value = null;
     Object.assign(loginData, { username: '', password: '', remember_me: false });
-    Object.assign(registerData, { full_name: '', username: '', email: '', password: '' });
+    Object.assign(registerData, { username: '', password: '' });
   }
 });
 </script>

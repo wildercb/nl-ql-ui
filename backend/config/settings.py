@@ -184,9 +184,26 @@ class Neo4jSettings(BaseSettings):
     """Neo4j graph database for content via Cypher."""
     uri: str = Field("bolt://neo4j:7687")
     user: str = Field("neo4j")
-    password: str = Field("password")
+    password: str = Field("test")
+    graphql_endpoint: str = Field("http://neo4j:4000/graphql")
 
     model_config = SettingsConfigDict(env_prefix="NEO4J_")
+
+
+class GroqSettings(BaseSettings):
+    """Groq API configuration."""
+    api_key: Optional[str] = Field(None, alias="GROQ_API_KEY")
+    base_url: str = Field("https://api.groq.com/openai/v1", alias="GROQ_BASE_URL")
+
+    model_config = SettingsConfigDict(env_prefix="GROQ_")
+
+
+class OpenRouterSettings(BaseSettings):
+    """OpenRouter API configuration."""
+    api_key: Optional[str] = Field(None, alias="OPENROUTER_API_KEY")
+    base_url: str = Field("https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
+
+    model_config = SettingsConfigDict(env_prefix="OPENROUTER_")
 
 
 class Settings(BaseSettings):
@@ -211,6 +228,8 @@ class Settings(BaseSettings):
     query: QuerySettings = Field(default_factory=QuerySettings)
     llm_tracking: LLMTrackingSettings = Field(default_factory=LLMTrackingSettings)
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
+    groq: GroqSettings = Field(default_factory=GroqSettings)
+    openrouter: OpenRouterSettings = Field(default_factory=OpenRouterSettings)
     
     @property
     def is_development(self) -> bool:
