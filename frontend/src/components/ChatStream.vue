@@ -23,11 +23,11 @@
       <div v-for="(msg, index) in displayMessages" :key="index" class="w-full">
         <!-- User Message -->
         <div v-if="msg.role === 'user'" class="flex items-end justify-end w-full">
-          <div class="bg-blue-600 text-white p-3 rounded-lg w-full shadow-md break-words">
+          <div class="bg-primary-600 text-white p-3 rounded-lg w-full shadow-md break-words">
             <p class="whitespace-pre-wrap" v-html="renderMarkdown(msg.content)"></p>
-            <div class="text-right text-xs text-blue-200 mt-1">{{ msg.timestamp }}</div>
+            <div class="text-right text-xs text-primary-200 mt-1">{{ msg.timestamp }}</div>
           </div>
-          <div class="w-8 h-8 ml-2 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">U</div>
+          <div class="w-8 h-8 ml-2 rounded-full bg-primary-600 text-white flex items-center justify-center font-bold">U</div>
         </div>
 
         <!-- Agent / Assistant Message -->
@@ -65,7 +65,7 @@
         <button
           @click="sendMessage"
           :disabled="!chatInput.trim() || isChatProcessing"
-          class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <i class="fas fa-paper-plane"></i>
         </button>

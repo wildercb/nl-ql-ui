@@ -34,7 +34,7 @@
                 <span :class="item.confidence > 0.8 ? 'text-green-400' : 'text-yellow-400'">
                   Confidence: {{ (item.confidence * 100).toFixed(0) }}%
                 </span>
-                <button @click="viewHistoryItem(item)" class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded-md text-sm font-semibold">
+                <button @click="viewHistoryItem(item)" class="px-3 py-1 bg-primary-600 hover:bg-primary-700 rounded-md text-sm font-semibold">
                   View
                 </button>
               </div>

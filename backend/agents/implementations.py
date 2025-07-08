@@ -631,7 +631,10 @@ Success: {data_result.get('success', False)}
 Data: {json.dumps(data_result.get('data'), indent=2) if data_result.get('data') else 'No data returned'}
 Errors: {data_result.get('errors', [])}
 
-Analyze the results and respond in JSON format:
+Analyze the results and respond in JSON format.
+If you are **not satisfied**, you MUST include an additional field named "suggested_query" containing an improved GraphQL query that you believe will satisfy the intent. The query must follow the executor rules described below (simple top-level collection, optional limit, JSON filter). If you are satisfied, omit this field.
+
+Respond in JSON with this schema:
 {{
     "satisfied": true/false,
     "accuracy_score": 0-10,
@@ -646,6 +649,8 @@ Consider:
 2. Are there any errors or missing data?
 3. Is the query structure appropriate for the intent?
 4. Are there obvious improvements that could be made?
+
+Executor Rules (for suggested_query):\n- Use pattern `query {{ collection(limit: Int, filter: JSON) {{ fieldA fieldB }} }}`\n- One collection only, optional limit max 100, optional JSON filter object.\n- List up to 10 scalar fields.\n- No variables ($var), no nested selections, no commas in field list.
 """
 
         try:
@@ -780,8 +785,8 @@ Return ONLY the improved GraphQL query, no explanation:"""
             # Clean up the response to extract just the GraphQL query
             improved_query = response_text.strip()
             
-            # Basic validation - should start with { and end with }
-            if improved_query.startswith('{') and improved_query.endswith('}'):
+            # Basic validation - accept `{ ... }` or starting with `query` keyword
+            if (improved_query.startswith('{') and improved_query.endswith('}')) or improved_query.lower().startswith('query'):
                 return improved_query
             else:
                 # Try to extract GraphQL from the response

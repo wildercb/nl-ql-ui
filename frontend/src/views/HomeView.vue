@@ -3,27 +3,14 @@
     <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-6 p-6 overflow-hidden">
       <!-- Left Column: NL Query Input + Agent Stream -->
       <div class="flex flex-col h-full min-h-0 border border-gray-700 rounded-none p-4">
-        <h2 class="text-lg font-semibold text-gray-200 mb-2">Enter Natural Language Query Here</h2>
-        <!-- NL Query Input (fixed height) -->
-        <div class="flex-none">
-          <textarea
-            v-model="naturalQuery"
-            @keyup.enter="runPipeline('standard')"
-            :disabled="isProcessing"
-            class="w-full resize-none p-3 bg-gray-700 rounded-none focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
-            placeholder="Enter your natural language query here..."
-          ></textarea>
-          <div class="flex flex-wrap justify-center items-center gap-2 mt-2">
-            <button @click="runPipeline('fast')" :disabled="isProcessing" class="btn-primary">
-              <i class="fas fa-bolt mr-2"></i> Translate
-            </button>
-            <button @click="runPipeline('standard')" :disabled="isProcessing" class="btn-primary">
-              <i class="fas fa-users-cog mr-2"></i> Multi-Agent
-            </button>
-            <button @click="runPipeline('comprehensive')" :disabled="isProcessing" class="btn-primary">
-              <i class="fas fa-rocket mr-2"></i> Enhanced Agents
-            </button>
-            <select v-model="selectedModel" class="p-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
+        <!-- Header row with title + controls -->
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+          <h2 class="text-lg font-semibold text-gray-200">Enter Natural Language Query</h2>
+
+          <!-- Controls (model, pipeline, send) -->
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- Model selection (compact) -->
+            <select v-model="selectedModel" class="px-3 py-1 text-xs bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500" :disabled="isProcessing">
               <option value="phi3:mini">phi3:mini (Ollama)</option>
               <option value="gemma3:4b">gemma3:4b (Ollama)</option>
               <option value="gemma3n:e2b">gemma3n:e2b (Ollama)</option>
@@ -40,8 +27,36 @@
               <option value="openrouter::google/gemma-7b-it">OpenRouter – Gemma-7B-IT</option>
               <option value="openrouter::thudm/chatglm3-6b-32k">OpenRouter – ChatGLM3-6B-32K</option>
             </select>
+
+            <!-- Pipeline strategy dropdown (same height) -->
+            <select
+              v-model="selectedPipeline"
+              :disabled="isProcessing"
+              class="px-3 py-1 text-xs bg-primary-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 cursor-pointer"
+            >
+              <option v-for="opt in pipelineOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+
+            <!-- Send button (compact with icon) -->
+            <button
+              @click="runPipeline(selectedPipeline)"
+              :disabled="isProcessing || !naturalQuery.trim()"
+              class="flex items-center justify-center gap-1 px-3 py-1 text-xs bg-primary-600 hover:bg-primary-700 text-white rounded-md transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <i class="fas fa-paper-plane"></i>
+            </button>
           </div>
         </div>
+
+        <!-- NL Query Input (fixed height) -->
+        <textarea
+          v-model="naturalQuery"
+          @keyup.enter="runPipeline(selectedPipeline)"
+          :disabled="isProcessing"
+          class="w-full resize-none p-3 bg-gray-700 rounded-none focus:outline-none focus:ring-2 focus:ring-purple-500 text-base min-h-[90px] max-h-[200px]"
+          placeholder="Enter your natural language query here..."
+        ></textarea>
+
         <!-- Agent Stream Chat (fills remaining space, scrollable) -->
         <div class="flex-1 min-h-0">
           <ChatStream 
@@ -57,7 +72,18 @@
 
       <!-- Right Column: GraphQL Query + Results -->
       <div class="flex flex-col h-full min-h-0 space-y-0 border border-gray-700 rounded-none p-4">
-        <h2 class="text-lg font-semibold text-gray-200 mb-2">Get Results Here</h2>
+        <!-- Header with Download button -->
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold text-gray-200">Get Results Here</h2>
+          <!-- Small green download button -->
+          <button
+            @click="downloadResults"
+            :disabled="!dataQueryResults.length"
+            class="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold px-3 py-1 rounded-md flex items-center"
+          >
+            <i class="fas fa-download mr-1"></i> Download
+          </button>
+        </div>
         <!-- GraphQL Query Box -->
         <div class="flex-none">
           <GraphQLQueryBox :query="finalGraphQLQuery" @update:query="finalGraphQLQuery = $event" @send="runDataQuery" />
@@ -84,8 +110,15 @@ const authStore = useAuthStore();
 const historyStore = useHistoryStore();
 const router = useRouter();
 
-// Model selection
-const selectedModel = ref('phi3:mini');
+// Model & pipeline selections
+const selectedModel = ref('gemma3:4b');
+const selectedPipeline = ref('comprehensive');
+
+const pipelineOptions = [
+  { label: 'Translator', value: 'fast' },
+  { label: 'Multi-Agent', value: 'standard' },
+  { label: 'Enhanced', value: 'comprehensive' },
+] as const;
 
 // Pipeline state
 const naturalQuery = ref('');
@@ -686,6 +719,20 @@ function formatAgentResult(result) {
   if (!result) return 'No result available';
   return `<pre>${JSON.stringify(result, null, 2)}</pre>`;
 }
+
+// 📥 Download results (JSON + multimodal links) – mirrors the button inside DataResults
+const downloadResults = () => {
+  if (!dataQueryResults.value.length) return;
+  const blob = new Blob([JSON.stringify(dataQueryResults.value, null, 2)], {
+    type: 'application/json',
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'results.json';
+  link.click();
+  URL.revokeObjectURL(url);
+};
 </script>
 
 <style scoped>

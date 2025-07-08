@@ -4,7 +4,17 @@
       <h3 class="text-lg font-bold text-gray-800 dark:text-gray-100 flex items-center">
         <i class="fas fa-database mr-2 text-green-600"></i> Results
       </h3>
-      <span v-if="results.length" class="text-xs text-gray-500">{{ results.length }} docs</span>
+      <div class="flex items-center gap-2">
+        <span v-if="results.length" class="text-xs text-gray-500">{{ results.length }} docs</span>
+        <!-- Download button -->
+        <button
+          @click="downloadJSON"
+          :disabled="!results.length"
+          class="bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-semibold px-3 py-1 rounded-md flex items-center"
+        >
+          <i class="fas fa-download mr-1"></i> Download
+        </button>
+      </div>
     </div>
 
     <div v-if="loading" class="text-center py-10">
@@ -83,6 +93,20 @@ const mediaUrls = (doc: Doc) => {
 
   visit(doc)
   return urls
+}
+
+// 📥 Download the entire results array as a JSON file
+const downloadJSON = () => {
+  if (!props.results.length) return
+  const blob = new Blob([JSON.stringify(props.results, null, 2)], {
+    type: 'application/json',
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'results.json'
+  link.click()
+  URL.revokeObjectURL(url)
 }
 </script>
 

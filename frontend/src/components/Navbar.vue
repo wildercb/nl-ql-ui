@@ -4,7 +4,8 @@
       <div class="flex items-center justify-between h-16">
         <!-- Logo and Navigation Links -->
         <div class="flex items-center">
-          <div class="flex-shrink-0">
+          <div class="flex-shrink-0 flex items-center space-x-2">
+            <i class="fas fa-warehouse text-green-500"></i>
             <h1 class="text-xl font-bold text-white">MPPW-MCP</h1>
           </div>
           <div class="hidden md:block ml-10">
