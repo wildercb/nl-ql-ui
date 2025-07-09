@@ -854,6 +854,8 @@ Provide detailed, actionable feedback that helps improve query quality.
 
 IMPORTANT: If you identify issues with the GraphQL query, you MUST provide a corrected version in the "suggested_query" field. This corrected query will be automatically adopted and executed.
 
+The value placed in "suggested_query" **must be ONLY the raw GraphQL query string** – do NOT wrap it in code fences, JSON, or add any additional commentary.
+
 Examples of good natural language to GraphQL translations:
 """
         
@@ -971,10 +973,33 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
 
     @classmethod
     def _is_valid_graphql(cls, query: str) -> bool:
-        """Very lightweight validation to ensure the string looks like a GraphQL query."""
-        if not query or len(query) < 4:
+        """Robust validation that the candidate is **actually** a GraphQL query.
+
+        The previous implementation relied solely on a permissive regex which
+        frequently classified arbitrary JSON (e.g. the full review response)
+        as GraphQL because it contains curly-braces. We now:
+
+        1. Require the basic shape using the existing regex.
+        2. Attempt to parse the query with ``graphql-core``'s ``parse``.  If
+           parsing fails, the string is **not** considered valid.
+        """
+
+        # Quick rejection for trivially short strings
+        if not query or len(query) < 6:
             return False
-        return bool(cls._GQL_MIN_PATTERN.search(query))
+
+        # Step 1 – cheap regex check for overall structure
+        if not cls._GQL_MIN_PATTERN.search(query):
+            return False
+
+        # Step 2 – definitive parse using graphql-core.  This catches JSON or
+        # other non-GraphQL content that sneaks past the regex.
+        try:
+            from graphql import parse as gql_parse  # type: ignore
+            gql_parse(query)
+            return True
+        except Exception:
+            return False
     
     def _heuristic_parse_review(self, review_text: str) -> Dict[str, Any]:
         """Parse review text using heuristic methods when JSON parsing fails."""
@@ -1091,7 +1116,7 @@ Provide comprehensive feedback on correctness, security, performance, and optimi
 
         return result
     
-    def _prepare_examples(self, examples: List[Dict[str, str]] | None) -> List[str]:
+    def _prepare_examples(self, examples: Optional[List[Dict[str, str]]]) -> List[str]:
         """Format examples for the translation/review services.
 
         Returns None when no examples are provided so that downstream services

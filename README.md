@@ -4,15 +4,28 @@
 
 A powerful, scalable FastMCP server that translates natural language queries into GraphQL using AI models through Ollama, with comprehensive validation, schema introspection, interactive assistance capabilities, and **real-time LLM interaction tracking** using MongoDB.
 
-## 🚀 New FastMCP Architecture
+## 🚀 Dual MCP Architecture
 
-This project has been completely rewritten using **FastMCP 2.10.1**, providing:
+This project provides **two MCP server implementations**:
 
-- **Modern MCP Implementation**: Using the latest FastMCP framework with decorator-based APIs
-- **Organized Structure**: Clear separation of tools, resources, and prompts for easy scaling
-- **Rich Context Management**: Comprehensive logging and progress reporting
+### 1. FastMCP Server (Python 3.10+)
+Using **FastMCP 2.10.1** framework:
+- **Modern MCP Implementation**: Latest FastMCP framework with decorator-based APIs
+- **Organized Structure**: Clear separation of tools, resources, and prompts
 - **Interactive Prompts**: Step-by-step guidance for users at all skill levels
 - **Resource Access**: Query history, templates, and analytics via MCP resources
+
+### 2. Enhanced MCP Server (Python 3.9+) ⭐ **NEW**
+Custom implementation providing **Enhanced Orchestration Service** capabilities:
+- **Multi-Agent Pipeline**: Rewrite → Translate → Review → Optimize → Data Review
+- **Multiple Strategies**: Fast, Standard, Comprehensive, and Adaptive pipelines
+- **Streaming Support**: Real-time processing updates via async generators
+- **Batch Processing**: Handle multiple queries concurrently with semaphore control
+- **Error Recovery**: Comprehensive error handling and graceful degradation
+- **Performance Monitoring**: Built-in execution statistics and metrics
+- **Python 3.9+ Compatible**: Works without external MCP dependencies
+
+Both servers provide:
 - **MongoDB Integration**: Document-based storage with flexible schema design
 - **🆕 LLM Tracking**: Comprehensive monitoring of all model interactions
 - **Real-time Analytics**: Live dashboards and performance monitoring

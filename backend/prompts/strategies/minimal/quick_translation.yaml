@@ -1,0 +1,14 @@
+name: quick_translation
+strategy: minimal
+description: "Minimal prompt for fast GraphQL translations"
+version: "1.0"
+tags:
+  - minimal
+  - fast
+  - basic
+variables:
+  - query
+content: |
+  Convert to GraphQL: {{ query }}
+
+  Return JSON: {"graphql": "query here", "confidence": 0.9} 

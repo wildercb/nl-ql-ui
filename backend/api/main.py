@@ -16,7 +16,7 @@ from .middleware import (
     SecurityMiddleware,
     CacheMiddleware
 )
-from .routes import health, translation, validation, models, analytics, interactions, history, chat, auth, data_query, multiagent, content_seed
+from .routes import health, translation, validation, models, analytics, interactions, history, chat, auth, data_query, multiagent, content_seed, mcp
 
 # Configure logging
 logging.basicConfig(
@@ -106,6 +106,7 @@ app.include_router(auth.router)  # Authentication endpoints
 app.include_router(data_query.router)  # Data query endpoint
 app.include_router(multiagent.router) # Enhanced multi-agent endpoints
 app.include_router(content_seed.router) # Data seeding endpoint
+app.include_router(mcp.router) # MCP server endpoints
 
 logger.info(f"📍 API routes registered: {len(app.routes)} endpoints")
 

@@ -1,5 +1,5 @@
-S"""FastMCP Server for Natural Language to GraphQL Translation."""
+"""Enhanced MCP Server for Natural Language to GraphQL Translation."""
 
-from .main import create_mcp_server, server
+from .enhanced_agent import server
 
-__all__ = ["create_mcp_server", "server"] 
+__all__ = ["server"] 

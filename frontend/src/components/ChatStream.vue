@@ -35,7 +35,7 @@
           <div class="w-8 h-8 mr-2 rounded-full bg-gray-700 text-white flex items-center justify-center">
             <i :class="getAgentIcon(msg.agent)" />
           </div>
-          <div class="bg-gray-700 p-3 rounded-lg w-full shadow-md break-words">
+          <div class="agent-bubble p-3 rounded-lg w-full shadow-md whitespace-pre-wrap break-words">
             <p class="font-bold text-purple-400 text-sm capitalize mb-1">{{ msg.agent }}</p>
             <div class="text-white prose prose-sm max-w-none" v-html="renderMarkdown(msg.content)" />
             <div v-if="msg.isStreaming" class="typing-indicator">
@@ -215,6 +215,13 @@ watch(() => props.loading, scrollToBottom);
 </script>
 
 <style scoped>
+/* Agent / Assistant bubble styling */
+.agent-bubble {
+  @apply bg-blue-600 text-white;
+  /* Slightly opaque for readability but less translucent than other blues */
+  background-color: rgba(37, 99, 235, 0.9); /* Tailwind blue-600 with 90% opacity */
+}
+
 .prose {
   color: inherit;
 }
