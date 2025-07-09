@@ -440,7 +440,7 @@ class EnhancedMCPServer:
         user_id: Optional[str] = None,
         session_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Process a query using the adaptive pipeline."""
+        """Process a query using the adaptive pipeline (maps to parallel strategy)."""
         
         if not session_id:
             session_id = self.create_session_id()
@@ -461,7 +461,7 @@ class EnhancedMCPServer:
                 pre_model=pre_model,
                 translator_model=translator_model,
                 review_model=review_model,
-                pipeline_strategy=PipelineStrategy.ADAPTIVE,
+                pipeline_strategy=PipelineStrategy.PARALLEL,  # Map adaptive to parallel
                 domain_context=domain_context,
                 schema_context=schema_context,
                 user_id=user_id,
@@ -476,7 +476,7 @@ class EnhancedMCPServer:
             
             # Add session tracking info
             final_result['session_id'] = session_id
-            final_result['pipeline_strategy'] = PipelineStrategy.ADAPTIVE
+            final_result['pipeline_strategy'] = "adaptive"  # Keep the name for compatibility
             final_result['events_count'] = len(events)
             
             logger.info(f"✅ Adaptive pipeline completed: {session_id}")
@@ -487,7 +487,7 @@ class EnhancedMCPServer:
             return {
                 "session_id": session_id,
                 "error": str(e),
-                "pipeline_strategy": PipelineStrategy.ADAPTIVE,
+                "pipeline_strategy": "adaptive",
                 "success": False
             }
 
@@ -522,13 +522,22 @@ class EnhancedMCPServer:
                         if not orchestration_service:
                             raise Exception("Orchestration service not initialized")
                         
+                        # Convert string strategy to enum
+                        strategy_map = {
+                            "fast": PipelineStrategy.FAST,
+                            "standard": PipelineStrategy.STANDARD,
+                            "comprehensive": PipelineStrategy.COMPREHENSIVE,
+                            "adaptive": PipelineStrategy.PARALLEL,  # Map adaptive to parallel
+                        }
+                        strategy_enum = strategy_map.get(pipeline_strategy, PipelineStrategy.STANDARD)
+                        
                         events = []
                         final_result = None
                         
                         async for event in orchestration_service.process_query_stream(
                             query=query,
                             translator_model=translator_model,
-                            pipeline_strategy=pipeline_strategy,
+                            pipeline_strategy=strategy_enum,
                             schema_context=schema_context,
                             user_id=user_id,
                             session_id=query_session_id
@@ -592,16 +601,16 @@ class EnhancedMCPServer:
                 "version": "1.0.0",
                 "description": "MCP server providing enhanced multi-agent orchestration capabilities",
                 "capabilities": {
-                    "pipeline_strategies": list(orchestration_service.pipeline_configs.keys()) if orchestration_service else [],
+                    "pipeline_strategies": ["fast", "standard", "comprehensive", "parallel"],
                     "streaming_support": True,
                     "batch_processing": True,
                     "error_recovery": True,
                     "performance_monitoring": True
                 },
                 "settings": {
-                    "default_model": settings.ollama.default_model,
-                    "ollama_base_url": settings.ollama.base_url,
-                    "database_url": settings.database.url
+                    "default_model": getattr(settings.ollama, 'default_model', 'unknown') if settings.ollama else 'unknown',
+                    "ollama_base_url": getattr(settings.ollama, 'base_url', 'unknown') if settings.ollama else 'unknown',
+                    "database_url": getattr(settings.database, 'url', 'unknown') if settings.database else 'unknown'
                 },
                 "available_tools": [
                     "process_query_standard",

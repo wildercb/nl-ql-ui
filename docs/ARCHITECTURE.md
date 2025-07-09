@@ -1,288 +1,356 @@
-# MPPW MCP Architecture Guide
+# MPPW-MCP Architecture
 
-## System Overview
+## Overview
 
-The MPPW MCP system provides a scalable architecture for natural language to GraphQL translation using multiple AI providers.
+The MPPW-MCP (Multi-Agent Pipeline Processing with MCP) system has been completely refactored into a unified, modular architecture that emphasizes type safety, extensibility, and maintainability. This document provides a high-level overview of the system architecture.
 
-## Core Components
+## Core Architecture Principles
 
-### 1. Frontend Layer (Vue.js 3)
-- Real-time query translation interface
-- Model switching and configuration
-- Query history and management
-- Schema context editing
+### 1. Unified Configuration
+- Single source of truth for all system configuration
+- Type-safe configuration with comprehensive validation
+- Easy extension for new providers, agents, and tools
 
-### 2. API Gateway (FastAPI)
-- RESTful endpoints with OpenAPI docs
-- Request validation and rate limiting
-- Health checks and monitoring
-- Security middleware
+### 2. Modular Design
+- Loosely coupled components with well-defined interfaces
+- High cohesion within modules
+- Easy testing and maintenance
 
-### 3. MCP Server
-- Model Context Protocol implementation
-- Extensible tool registry
-- Plugin-based architecture
-- WebSocket communication
+### 3. Extensibility
+- Plugin-based architecture for easy extension
+- Standardized interfaces for all components
+- Configuration-driven behavior
 
-### 4. Service Layer
-- **Translation Service**: NL to GraphQL conversion
-- **Validation Service**: Query syntax checking
-- **Model Service**: AI provider abstraction
-- **Schema Service**: GraphQL introspection
+## System Components
 
-### 5. Model Provider Abstraction
-- Uniform interface for AI providers
-- Support for Ollama, OpenAI, Anthropic, Custom
-- Cost tracking and performance monitoring
-- Dynamic provider switching
+### Configuration Layer (`backend/config/`)
 
-## Design Patterns
+The foundation of the system, providing unified configuration management:
 
-### Provider Pattern
-```python
-class BaseModelProvider(ABC):
-    @abstractmethod
-    async def generate(self, request: GenerationRequest) -> GenerationResponse:
-        pass
-```
+- **Unified Config** (`unified_config.py`): Central configuration management
+- **Config Builder**: Fluent API for configuration setup
+- **Type Safety**: Comprehensive dataclasses and enums
 
-### Plugin Architecture
-```python
-class ToolPlugin:
-    def register_tool(self) -> ToolInfo:
-        return {"name": "tool_name", "handler": self.handle, "schema": {...}}
-```
+### Prompt Management (`backend/prompts/`)
 
-### Template System
-Customizable prompts with Jinja2 templates for different domains and models.
+Intelligent template management system:
 
-## Extensibility Points
+- **Unified Prompt Manager** (`unified_prompts.py`): Template selection and rendering
+- **Strategy-based Templates**: Different prompt strategies for different scenarios
+- **Jinja2 Integration**: Powerful templating with validation
 
-### Adding Model Providers
-1. Implement `BaseModelProvider` interface
-2. Register with `ModelProviderFactory`
-3. Add configuration settings
+### Agent Framework (`backend/agents/`)
 
-### Adding MCP Tools
-1. Create tool handler function
-2. Define tool schema
-3. Register via plugin system
+Core agent execution system:
 
-### Custom Prompt Templates
-1. Create Jinja2 templates
-2. Register with `PromptManager`
-3. Use in translation service
+- **Unified Agents** (`unified_agents.py`): Modern agent implementations
+- **Agent Factory**: Instance creation and management
+- **Pipeline Executor**: Orchestration of agent workflows
+- **Legacy Support**: Backward compatibility with existing agents
 
-## Configuration
-- Environment-based settings with Pydantic
-- Runtime configuration updates
-- Feature flags and A/B testing support
+### MCP Tools (`backend/mcp_server/tools/`)
 
-## Security & Performance
-- Rate limiting and input validation
-- Multi-level caching (Redis, DB, File)
-- Async architecture throughout
-- Comprehensive monitoring and logging
+MCP-compatible tool system:
 
-```mermaid
-graph TB
-    UI[Vue.js Frontend] --> API[FastAPI REST API]
-    UI --> MCP[MCP Server]
-    API --> TS[Translation Service]
-    API --> VS[Validation Service] 
-    API --> MS[Model Service]
-    TS --> MP[Model Providers]
-    MP --> Ollama[Ollama]
-    MP --> OpenAI[OpenAI]
-    MP --> Anthropic[Anthropic]
-    MP --> Custom[Custom Providers]
-    API --> DB[(PostgreSQL)]
-    API --> Redis[(Redis Cache)]
-    MCP --> Tools[MCP Tools]
-    Tools --> TS
-    Tools --> VS
-    Tools --> SA[Schema Analyzer]
-    Tools --> QO[Query Optimizer]
-```
+- **Unified Tools** (`unified_tools.py`): Modern tool implementations
+- **Tool Registry**: Automatic discovery and registration
+- **MCP Integration**: Full Model Context Protocol compatibility
 
-## Configuration Management
+### Provider System (`backend/services/`)
 
-### Environment-Based Configuration
-```python
-class Settings(BaseSettings):
-    # Core settings
-    database: DatabaseSettings
-    redis: RedisSettings
-    api: APISettings
-    
-    # Provider settings
-    ollama: OllamaSettings
-    openai: OpenAISettings
-    anthropic: AnthropicSettings
-    
-    # Custom settings
-    custom: CustomSettings
-    
-    class Config:
-        env_file = ".env"
-```
+Unified access to LLM providers:
 
-### Runtime Configuration
-- Model switching without restart
-- Dynamic prompt template loading
-- Feature flags for experimental features
-- A/B testing configuration
+- **Unified Providers** (`unified_providers.py`): Provider abstraction
+- **Multiple Providers**: OpenAI, Ollama, Groq, OpenRouter support
+- **Provider Registry**: Dynamic provider management
 
-## Security Architecture
+### API Layer (`backend/api/`)
 
-### API Security
-- Rate limiting per IP/user
-- Input validation and sanitization
-- CORS configuration
-- Authentication middleware (ready for implementation)
+RESTful API and routing:
 
-### Model Provider Security
-- API key management
-- Request/response logging
-- Cost monitoring and limits
-- Provider-specific security policies
-
-### Data Security
-- Database connection encryption
-- Sensitive data masking in logs
-- Query sanitization before storage
-- User data isolation
-
-## Performance Considerations
-
-### Caching Strategy
-```python
-# Multi-level caching
-L1_CACHE = "Redis"        # Fast access, 1-hour TTL
-L2_CACHE = "Database"     # Persistent storage
-L3_CACHE = "File System"  # Large schemas and templates
-```
-
-### Async Architecture
-- Non-blocking I/O throughout
-- Connection pooling for databases
-- Background task processing
-- Streaming responses for large results
-
-### Optimization Techniques
-- Query result caching
-- Schema precompilation
-- Model response caching
-- Prompt template compilation
-
-## Monitoring and Observability
-
-### Metrics Collection
-- Request/response times
-- Model usage and costs
-- Translation accuracy
-- Error rates and types
-
-### Logging Strategy
-```python
-# Structured logging with context
-logger.info(
-    "Translation completed",
-    query_type="user_search",
-    model="gpt-3.5-turbo",
-    confidence=0.89,
-    processing_time=1.23
-)
-```
-
-### Health Checks
-- Service-level health endpoints
-- Dependency health monitoring
-- Performance threshold alerting
-- Automatic failover capabilities
-
-## Deployment Architecture
-
-### Development Environment
-```yaml
-# docker-compose.yml
-services:
-  backend:
-    build: ./backend
-    environment:
-      - ENV=development
-  frontend:
-    build: ./frontend
-  ollama:
-    image: ollama/ollama
-  postgres:
-    image: postgres:15
-  redis:
-    image: redis:7-alpine
-```
-
-### Production Considerations
-- Horizontal scaling with load balancers
-- Container orchestration (Kubernetes)
-- Database clustering and replication
-- CDN for frontend assets
-- Monitoring and alerting stack
+- **FastAPI Server**: High-performance async API
+- **Route Organization**: Modular route structure
+- **Middleware**: Authentication, logging, error handling
 
 ## Data Flow
 
-### Query Translation Flow
-1. User enters natural language query
-2. Frontend sends request to API
-3. API validates and routes to Translation Service
-4. Translation Service selects appropriate model provider
-5. Provider generates GraphQL query
-6. Validation Service checks query syntax
-7. Result cached and returned to user
-8. Query and result stored for history/analytics
+### Request Processing Flow
 
-### Model Provider Abstraction Flow
-1. Request received with provider preference
-2. Provider Factory creates appropriate provider instance
-3. Request transformed to provider-specific format
-4. Provider API called with authentication
-5. Response normalized to common format
-6. Costs and metrics tracked
-7. Response returned to caller
+1. **Client Request** → API endpoint
+2. **API Layer** → Pipeline Executor
+3. **Pipeline Executor** → Agent Factory
+4. **Agent Factory** → Specific Agent
+5. **Agent** → Prompt Manager (for templates)
+6. **Agent** → Provider Service (for generation)
+7. **Provider Service** → External API
+8. **Response** flows back through the chain
 
-## Testing Strategy
+### MCP Tool Flow
 
-### Unit Testing
-- Service layer logic
-- Model provider implementations
-- Validation rules
-- Prompt template rendering
+1. **MCP Client** → MCP Server
+2. **MCP Server** → Tool Registry
+3. **Tool Registry** → Specific Tool
+4. **Tool** → Core Systems (Agents, Providers, Config)
+5. **Result** flows back to MCP Client
 
-### Integration Testing
-- API endpoint testing
-- Database operations
-- External provider integration
-- MCP tool functionality
+## Key Features
 
-### End-to-End Testing
-- Complete translation workflows
-- User interface interactions
-- Multi-provider scenarios
-- Performance benchmarks
+### Type Safety
+- Comprehensive dataclasses and enums
+- Runtime validation
+- IDE support with full type hints
 
-## Future Architecture Considerations
+### Extensibility
+- Plugin-based architecture
+- Standardized interfaces
+- Configuration-driven behavior
 
-### Planned Enhancements
-- Microservice decomposition
-- Event-driven architecture
-- Machine learning pipeline integration
-- Multi-tenant support
-- Real-time collaboration features
+### Performance
+- Async operations throughout
+- Connection pooling
+- Intelligent caching
 
-### Scalability Roadmap
-- Auto-scaling based on demand
-- Multi-region deployment
-- Edge computing for low latency
-- Advanced caching strategies
-- Cost optimization algorithms
+### Reliability
+- Comprehensive error handling
+- Fallback mechanisms
+- Retry logic
 
-This architecture provides a solid foundation for building a scalable, extensible natural language to GraphQL translation system while maintaining flexibility for future enhancements and customizations. 
+### Observability
+- Structured logging
+- Performance metrics
+- Debug capabilities
+
+## Technology Stack
+
+### Backend
+- **Python 3.11+**: Modern Python features
+- **FastAPI**: High-performance web framework
+- **AsyncIO**: Async programming
+- **Pydantic**: Data validation
+- **Jinja2**: Template engine
+
+### Database
+- **MongoDB**: Document storage
+- **Neo4j**: Graph database (optional)
+
+### LLM Providers
+- **OpenAI**: GPT models
+- **Ollama**: Local models
+- **Groq**: Fast inference
+- **OpenRouter**: Model aggregation
+
+### Infrastructure
+- **Docker**: Containerization
+- **Docker Compose**: Development environment
+- **Nginx**: Reverse proxy (production)
+
+## Deployment Architecture
+
+### Development
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Frontend      │    │   Backend       │    │   External      │
+│   Vue.js        │◄──►│   FastAPI       │◄──►│   APIs          │
+│   Port 5173     │    │   Port 8000     │    │   OpenAI/Ollama │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                               │
+                       ┌─────────────────┐
+                       │   Database      │
+                       │   MongoDB       │
+                       │   Port 27017    │
+                       └─────────────────┘
+```
+
+### Production
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Load Balancer │    │   Application   │    │   External      │
+│   Nginx         │◄──►│   Containers    │◄──►│   Services      │
+│   Port 80/443   │    │   FastAPI+Vue   │    │   Cloud APIs    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                               │
+                       ┌─────────────────┐
+                       │   Database      │
+                       │   Managed DB    │
+                       │   MongoDB Atlas │
+                       └─────────────────┘
+```
+
+## Security Considerations
+
+### API Security
+- JWT-based authentication
+- Rate limiting
+- Request validation
+- CORS configuration
+
+### Data Protection
+- Environment-based secrets
+- Encrypted connections
+- Input sanitization
+- Output validation
+
+### Provider Security
+- Secure API key management
+- Request/response filtering
+- Connection timeouts
+- Error message sanitization
+
+## Migration Strategy
+
+The new architecture maintains backward compatibility while providing clear migration paths:
+
+### Phase 1: Parallel Systems
+- New unified components alongside legacy ones
+- Gradual feature migration
+- Configuration bridge between systems
+
+### Phase 2: Integration
+- Legacy endpoints using new backend
+- Unified configuration adoption
+- Tool modernization
+
+### Phase 3: Cleanup
+- Legacy code removal
+- Documentation updates
+- Performance optimization
+
+## Monitoring and Observability
+
+### Logging
+- Structured JSON logging
+- Correlation IDs for request tracking
+- Different log levels for different environments
+
+### Metrics
+- Request/response times
+- Error rates
+- Provider performance
+- Resource utilization
+
+### Health Checks
+- API endpoint health
+- Database connectivity
+- External service availability
+- Resource monitoring
+
+## Future Enhancements
+
+### Planned Features
+- **Advanced Pipeline Orchestration**: Complex workflow support
+- **Real-time Processing**: WebSocket support for streaming
+- **Enhanced Security**: OAuth2, role-based access control
+- **Multi-tenancy**: Support for multiple organizations
+- **Advanced Analytics**: Usage analytics and insights
+
+### Extension Points
+- **Custom Agents**: Plugin system for custom agent types
+- **Custom Providers**: Easy integration of new LLM providers
+- **Custom Tools**: MCP-compatible tool development
+- **Custom Pipelines**: Visual pipeline builder
+
+## Documentation
+
+- **[Unified Architecture Guide](UNIFIED_ARCHITECTURE_GUIDE.md)**: Detailed implementation guide
+- **[Configuration Guide](CONFIGURATION.md)**: Configuration management
+- **[Usage Guide](USAGE_GUIDE.md)**: End-user documentation
+- **[Examples](EXAMPLES.md)**: Code examples and use cases
+
+## Visual Architecture
+
+### System Overview
+
+```mermaid
+graph TB
+    subgraph "Configuration Layer"
+        UC[Unified Config]
+        CB[Config Builder]
+    end
+
+    subgraph "Core Services"
+        UPS[Unified Provider Service]
+        UPM[Unified Prompt Manager] 
+        AF[Agent Factory]
+        TR[Tool Registry]
+    end
+
+    subgraph "Execution Layer"
+        PE[Pipeline Executor]
+        AGENTS[Agents]
+        TOOLS[MCP Tools]
+    end
+
+    subgraph "External Systems"
+        APIS[LLM APIs]
+        DB[Database]
+        MCP[MCP Client]
+    end
+
+    UC --> UPS
+    UC --> UPM
+    UC --> AF
+    UC --> TR
+    
+    AF --> PE
+    TR --> TOOLS
+    UPS --> APIS
+    PE --> AGENTS
+    AGENTS --> UPM
+    AGENTS --> UPS
+    TOOLS --> AF
+    TOOLS --> UPS
+    MCP --> TOOLS
+
+    style UC fill:#e1f5fe
+    style UPS fill:#fce4ec
+    style AF fill:#e8f5e8
+    style TR fill:#fff3e0
+```
+
+### Component Relationships
+
+```mermaid
+classDiagram
+    class UnifiedConfig {
+        +models: Dict
+        +providers: Dict
+        +agents: Dict
+        +tools: Dict
+        +pipelines: Dict
+        +get_model_config()
+        +get_agent_config()
+        +validate()
+    }
+
+    class AgentFactory {
+        +create_agent()
+        +get_available_agents()
+    }
+
+    class BaseAgent {
+        +execute()
+        +get_prompt()
+        +generate_response()
+    }
+
+    class UnifiedProviderService {
+        +generate()
+        +list_providers()
+        +get_provider()
+    }
+
+    class ToolRegistry {
+        +register_tool()
+        +get_tool()
+        +list_tools()
+    }
+
+    UnifiedConfig --> AgentFactory
+    UnifiedConfig --> UnifiedProviderService
+    UnifiedConfig --> ToolRegistry
+    AgentFactory --> BaseAgent
+    BaseAgent --> UnifiedProviderService
+    ToolRegistry --> BaseAgent
+```
+
+This architecture provides a solid foundation for building scalable, maintainable, and extensible AI agent systems while maintaining the flexibility to adapt to future requirements. 

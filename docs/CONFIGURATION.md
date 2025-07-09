@@ -1,336 +1,503 @@
-# Configuration Guide
+# Configuration Guide - Unified Architecture
 
-This guide covers all configuration options for the MPPW MCP system.
+## Overview
 
-## Environment Variables
+The MPPW-MCP system uses a unified configuration system that provides type-safe, centralized management of all system components. This guide covers how to configure agents, providers, models, tools, and pipelines.
 
-Create a `.env` file in the project root with these variables:
+## Unified Configuration System
 
-### Core Database & API
-```bash
-# Database Configuration
-DATABASE_URL=postgresql://user:password@localhost:5432/mppw_mcp
-REDIS_URL=redis://localhost:6379/0
+### Core Concepts
 
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=8000
-API_DEBUG=true
-SECRET_KEY=your-secret-key-here
+The unified configuration system (`backend/config/unified_config.py`) provides:
 
-# CORS Settings
-CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080"]
-CORS_ALLOW_CREDENTIALS=true
-RATE_LIMIT_REQUESTS_PER_MINUTE=60
+- **Type Safety**: All configuration uses dataclasses and enums
+- **Centralized Management**: Single source of truth for all settings
+- **Easy Extension**: Simple API for adding new components
+- **Validation**: Comprehensive validation and error checking
+- **Environment Integration**: Support for environment variables
+
+### Configuration Builder
+
+Use the `ConfigBuilder` for fluent configuration setup:
+
+```python
+from backend.config.unified_config import ConfigBuilder, ModelProvider, ModelSize, AgentType
+
+builder = ConfigBuilder()
 ```
 
-### Model Providers
+## Model Configuration
 
-#### Ollama (Default)
-```bash
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_DEFAULT_MODEL=llama2
-OLLAMA_TIMEOUT=30
-OLLAMA_MAX_RETRIES=3
+### Adding Models
+
+Models are selected via the UI, but can also be configured programmatically:
+
+```python
+# Add a model (typically done via UI)
+builder.add_model(
+    name="gpt-4",
+    provider=ModelProvider.OPENAI,
+    size=ModelSize.LARGE,
+    capabilities=["translation", "rewriting", "analysis", "review"]
+)
+
+builder.add_model(
+    name="llama3:8b",
+    provider=ModelProvider.OLLAMA, 
+    size=ModelSize.MEDIUM,
+    capabilities=["translation", "analysis"]
+)
 ```
 
-#### OpenAI (Optional)
-```bash
-OPENAI_API_KEY=your-openai-api-key-here
-OPENAI_DEFAULT_MODEL=gpt-3.5-turbo
-OPENAI_MAX_TOKENS=4096
-```
+### Model Enums
 
-#### Anthropic (Optional)
-```bash
-ANTHROPIC_API_KEY=your-anthropic-api-key-here
-ANTHROPIC_DEFAULT_MODEL=claude-3-sonnet
-ANTHROPIC_MAX_TOKENS=4096
-```
+```python
+class ModelProvider(Enum):
+    OPENAI = "openai"
+    OLLAMA = "ollama"
+    GROQ = "groq"
+    OPENROUTER = "openrouter"
+    ANTHROPIC = "anthropic"
 
-#### HuggingFace (Optional)
-```bash
-HUGGINGFACE_API_TOKEN=your-huggingface-token-here
-HUGGINGFACE_DEFAULT_MODEL=microsoft/DialoGPT-large
-```
-
-### MCP Server
-```bash
-MCP_SERVER_HOST=localhost
-MCP_SERVER_PORT=3001
-MCP_ENABLE_TOOLS=true
-```
-
-### Logging & Security
-```bash
-LOG_LEVEL=INFO
-LOG_FORMAT=json
-ENABLE_REQUEST_LOGGING=true
-ENABLE_RATE_LIMITING=true
-ENABLE_CORS=true
-ENABLE_SECURITY_HEADERS=true
-```
-
-### Feature Flags
-```bash
-ENABLE_BATCH_TRANSLATION=true
-ENABLE_WEBSOCKET_TRANSLATION=true
-ENABLE_SCHEMA_ANALYZER=true
-ENABLE_QUERY_OPTIMIZER=true
+class ModelSize(Enum):
+    SMALL = "small"      # < 1B parameters
+    MEDIUM = "medium"    # 1-10B parameters  
+    LARGE = "large"      # 10-100B parameters
+    XLARGE = "xlarge"    # > 100B parameters
 ```
 
 ## Provider Configuration
 
-### Adding Custom Providers
+### Adding Providers
+
 ```python
-# config/custom_providers.py
-CUSTOM_PROVIDERS = {
-    "azure_openai": {
-        "endpoint": "https://your-resource.openai.azure.com/",
-        "api_key": "your-azure-key",
-        "api_version": "2023-05-15"
-    },
-    "cohere": {
-        "api_key": "your-cohere-key",
-        "model": "command-xlarge"
+# OpenAI Provider
+builder.add_provider(
+    name="openai",
+    provider_type=ModelProvider.OPENAI,
+    settings={
+        "api_key": "your-openai-api-key",
+        "base_url": "https://api.openai.com/v1",  # optional
+        "timeout": 30
     }
-}
-```
+)
 
-### Model Preferences
-```bash
-# Model selection by use case
-CUSTOM_TRANSLATION_MODEL_FAST=gpt-3.5-turbo
-CUSTOM_TRANSLATION_MODEL_ACCURATE=gpt-4
-CUSTOM_TRANSLATION_MODEL_LOCAL=llama2
-CUSTOM_TRANSLATION_MODEL_SPECIALIZED=codellama
-```
-
-## Prompt Configuration
-
-### Custom Domain Prompts
-```python
-# config/prompts.py
-DOMAIN_PROMPTS = {
-    "ecommerce": {
-        "system": "You are an e-commerce GraphQL expert...",
-        "rules": [
-            "Always include product availability",
-            "Use pagination for lists",
-            "Include price information"
-        ]
-    },
-    "social": {
-        "system": "You are a social media platform expert...",
-        "rules": [
-            "Include privacy checks",
-            "Use fragments for user data",
-            "Consider content moderation"
-        ]
+# Ollama Provider (local)
+builder.add_provider(
+    name="ollama",
+    provider_type=ModelProvider.OLLAMA,
+    settings={
+        "base_url": "http://localhost:11434",
+        "timeout": 60
     }
-}
-```
+)
 
-## Runtime Configuration
-
-### Dynamic Model Switching
-```python
-# In your application
-from backend.services.translation_service import TranslationService
-
-# Switch providers at runtime
-service = TranslationService()
-await service.switch_provider("openai", api_key="new-key")
-
-# Switch models
-await service.switch_model("gpt-4")
-```
-
-### Feature Flag Management
-```python
-# config/feature_flags.py
-class FeatureFlags:
-    ENABLE_ADVANCED_VALIDATION = True
-    ENABLE_COST_TRACKING = True
-    ENABLE_A_B_TESTING = False
-    ENABLE_REAL_TIME_ANALYTICS = True
-```
-
-## Performance Tuning
-
-### Cache Configuration
-```bash
-ENABLE_REDIS_CACHE=true
-CACHE_TTL_SECONDS=3600
-ENABLE_QUERY_CACHE=true
-MAX_CACHE_SIZE_MB=512
-```
-
-### Database Optimization
-```bash
-DB_POOL_SIZE=20
-DB_MAX_OVERFLOW=30
-DB_POOL_TIMEOUT=30
-DB_POOL_RECYCLE=3600
-```
-
-### Model Provider Limits
-```python
-PROVIDER_LIMITS = {
-    "openai": {
-        "requests_per_minute": 60,
-        "tokens_per_minute": 90000,
-        "max_concurrent": 5
-    },
-    "anthropic": {
-        "requests_per_minute": 50,
-        "tokens_per_minute": 40000,
-        "max_concurrent": 3
+# Groq Provider
+builder.add_provider(
+    name="groq",
+    provider_type=ModelProvider.GROQ,
+    settings={
+        "api_key": "your-groq-api-key",
+        "base_url": "https://api.groq.com/openai/v1"
     }
-}
+)
 ```
 
-## Security Configuration
+### Environment Variables
 
-### API Security
+Providers can use environment variables for sensitive data:
+
 ```bash
-JWT_SECRET_KEY=your-jwt-secret
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION_HOURS=24
-BCRYPT_ROUNDS=12
+# .env file
+OPENAI_API_KEY=your-openai-key
+GROQ_API_KEY=your-groq-key
+ANTHROPIC_API_KEY=your-anthropic-key
+OLLAMA_BASE_URL=http://localhost:11434
 ```
 
-### Rate Limiting
+## Agent Configuration
+
+### Agent Types
+
 ```python
-RATE_LIMITS = {
-    "translation": "10/minute",
-    "validation": "20/minute", 
-    "models": "5/minute",
-    "health": "100/minute"
-}
+class AgentType(Enum):
+    TRANSLATOR = "translator"
+    REWRITER = "rewriter" 
+    REVIEWER = "reviewer"
+    ANALYZER = "analyzer"
+
+class AgentCapability(Enum):
+    TRANSLATION = "translation"
+    REWRITING = "rewriting"
+    REVIEW = "review"
+    ANALYSIS = "analysis"
+    VALIDATION = "validation"
+    OPTIMIZATION = "optimization"
 ```
 
-## Development vs Production
+### Adding Agents
 
-### Development
-```bash
-ENV=development
-API_DEBUG=true
-LOG_LEVEL=DEBUG
-ENABLE_HOT_RELOAD=true
-DEV_ENABLE_DEBUG_TOOLBAR=true
-```
+**Important**: Agents use models selected in the UI, not hardcoded defaults.
 
-### Production
-```bash
-ENV=production
-API_DEBUG=false
-LOG_LEVEL=INFO
-ENABLE_HOT_RELOAD=false
-SECURE_SSL_REDIRECT=true
-SECURE_HSTS_SECONDS=31536000
-```
-
-## Docker Configuration
-
-### Environment Variables in Docker
-```yaml
-# docker-compose.yml
-services:
-  backend:
-    environment:
-      - DATABASE_URL=postgresql://postgres:password@db:5432/mppw_mcp
-      - REDIS_URL=redis://redis:6379/0
-      - OLLAMA_BASE_URL=http://ollama:11434
-```
-
-### Health Check Configuration
-```yaml
-healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-  interval: 30s
-  timeout: 10s
-  retries: 3
-  start_period: 40s
-```
-
-## Monitoring Configuration
-
-### Metrics Collection
-```bash
-ENABLE_METRICS=true
-METRICS_PORT=9090
-PROMETHEUS_ENDPOINT=/metrics
-```
-
-### Logging Configuration
 ```python
-LOGGING_CONFIG = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "formatters": {
-        "default": {
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        },
-        "json": {
-            "format": "%(asctime)s %(name)s %(levelname)s %(message)s",
-            "class": "pythonjsonlogger.jsonlogger.JsonFormatter"
-        }
-    },
-    "handlers": {
-        "console": {
-            "class": "logging.StreamHandler",
-            "formatter": "json"
-        }
-    },
-    "root": {
-        "level": "INFO",
-        "handlers": ["console"]
+# Configure agent behavior (models selected via UI)
+builder.add_agent(
+    agent_type=AgentType.TRANSLATOR,
+    capabilities=[AgentCapability.TRANSLATION, AgentCapability.VALIDATION],
+    primary_model=None,  # Selected via UI
+    fallback_models=[],  # Configured via UI
+    prompt_strategy=PromptStrategy.DETAILED,
+    max_retries=3,
+    timeout=30,
+    custom_settings={
+        "temperature": 0.3,
+        "max_tokens": 1000
     }
-}
+)
+```
+
+### Prompt Strategies
+
+```python
+class PromptStrategy(Enum):
+    DETAILED = "detailed"           # Comprehensive prompts
+    MINIMAL = "minimal"             # Concise prompts
+    CHAIN_OF_THOUGHT = "chain_of_thought"  # Step-by-step reasoning
+    FEW_SHOT = "few_shot"          # Example-based prompts
+```
+
+## Tool Configuration
+
+### Tool Categories
+
+```python
+class ToolCategory(Enum):
+    TRANSLATION = "translation"
+    VALIDATION = "validation"
+    ANALYSIS = "analysis"
+    PROCESSING = "processing"
+    UTILITY = "utility"
+    MCP = "mcp"
+```
+
+### Adding Tools
+
+```python
+builder.add_tool(
+    name="translate_query",
+    category=ToolCategory.TRANSLATION,
+    settings={
+        "max_length": 1000,
+        "timeout": 30
+    }
+)
+
+builder.add_tool(
+    name="validate_graphql",
+    category=ToolCategory.VALIDATION,
+    settings={
+        "strict_mode": True,
+        "check_syntax": True,
+        "check_semantics": True
+    }
+)
+```
+
+## Pipeline Configuration
+
+### Pipeline Strategies
+
+```python
+class PipelineStrategy(Enum):
+    SEQUENTIAL = "sequential"      # Execute agents in order
+    PARALLEL = "parallel"          # Execute agents concurrently
+    CONDITIONAL = "conditional"    # Execute based on conditions
+    ITERATIVE = "iterative"        # Execute with feedback loops
+```
+
+### Adding Pipelines
+
+```python
+builder.add_pipeline(
+    name="translation_pipeline",
+    agents=[AgentType.TRANSLATOR, AgentType.REVIEWER],
+    strategy=PipelineStrategy.SEQUENTIAL,
+    settings={
+        "max_iterations": 3,
+        "quality_threshold": 0.8
+    }
+)
+
+builder.add_pipeline(
+    name="analysis_pipeline", 
+    agents=[AgentType.ANALYZER],
+    strategy=PipelineStrategy.PARALLEL,
+    settings={
+        "concurrent_limit": 5
+    }
+)
+```
+
+## Complete Configuration Example
+
+```python
+from backend.config.unified_config import (
+    ConfigBuilder, set_global_config,
+    ModelProvider, ModelSize, AgentType, AgentCapability,
+    PromptStrategy, ToolCategory, PipelineStrategy
+)
+
+def setup_production_config():
+    """Complete production configuration example."""
+    builder = ConfigBuilder()
+    
+    # Providers
+    builder.add_provider("openai", ModelProvider.OPENAI, {
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "timeout": 30
+    })
+    
+    builder.add_provider("ollama", ModelProvider.OLLAMA, {
+        "base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+        "timeout": 60
+    })
+    
+    # Models (typically configured via UI)
+    builder.add_model("gpt-4", ModelProvider.OPENAI, ModelSize.LARGE, 
+                     ["translation", "rewriting", "review"])
+    builder.add_model("llama3:8b", ModelProvider.OLLAMA, ModelSize.MEDIUM,
+                     ["translation", "analysis"])
+    
+    # Agents (models selected via UI)
+    builder.add_agent(
+        AgentType.TRANSLATOR,
+        [AgentCapability.TRANSLATION],
+        prompt_strategy=PromptStrategy.DETAILED,
+        max_retries=3
+    )
+    
+    builder.add_agent(
+        AgentType.REVIEWER,
+        [AgentCapability.REVIEW, AgentCapability.VALIDATION],
+        prompt_strategy=PromptStrategy.CHAIN_OF_THOUGHT,
+        max_retries=2
+    )
+    
+    # Tools
+    builder.add_tool("translate_query", ToolCategory.TRANSLATION, 
+                    {"max_length": 1000})
+    builder.add_tool("validate_graphql", ToolCategory.VALIDATION,
+                    {"strict_mode": True})
+    
+    # Pipelines
+    builder.add_pipeline("translation_pipeline", 
+                        [AgentType.TRANSLATOR, AgentType.REVIEWER],
+                        PipelineStrategy.SEQUENTIAL)
+    
+    # Build and set global config
+    config = builder.build()
+    set_global_config(config)
+    
+    return config
+```
+
+## Accessing Configuration
+
+### Get Global Configuration
+
+```python
+from backend.config.unified_config import get_config
+
+config = get_config()
+```
+
+### Access Specific Components
+
+```python
+# Get model configuration
+model_config = config.get_model_config("gpt-4")
+
+# Get agent configuration  
+agent_config = config.get_agent_config(AgentType.TRANSLATOR)
+
+# Get tool configuration
+tool_config = config.get_tool_config("translate_query")
+
+# Get pipeline configuration
+pipeline_config = config.get_pipeline_config("translation_pipeline")
+
+# Get provider configuration
+provider_config = config.get_provider_config("openai")
+```
+
+### Smart Model Selection
+
+```python
+# Get best model for capability
+best_model = config.get_best_model_for_capability("translation")
+
+# Get model with fallbacks
+model_with_fallbacks = config.get_model_with_fallbacks("gpt-4")
+
+# Get models by provider
+ollama_models = config.get_models_by_provider(ModelProvider.OLLAMA)
 ```
 
 ## Configuration Validation
 
-### Startup Checks
+### Built-in Validation
+
 ```python
-# backend/config/validation.py
-def validate_configuration():
-    """Validate all configuration settings on startup."""
-    checks = [
-        check_database_connection(),
-        check_redis_connection(),
-        check_ollama_connection(),
-        validate_environment_variables(),
-        check_model_availability()
-    ]
-    
-    failed_checks = [check for check in checks if not check.passed]
-    if failed_checks:
-        raise ConfigurationError(f"Failed checks: {failed_checks}")
+# Validate configuration
+validation_result = config.validate()
+
+if not validation_result.is_valid:
+    print("Configuration errors:")
+    for error in validation_result.errors:
+        print(f"- {error}")
 ```
 
-### Configuration Schema
-```python
-from pydantic import BaseSettings, validator
+### Custom Validation Rules
 
-class Settings(BaseSettings):
-    database_url: str
-    redis_url: str
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    
-    @validator('database_url')
-    def validate_database_url(cls, v):
-        if not v.startswith(('postgresql://', 'sqlite:///')):
-            raise ValueError('Invalid database URL')
-        return v
-    
-    @validator('api_port')
-    def validate_port(cls, v):
-        if not 1 <= v <= 65535:
-            raise ValueError('Port must be between 1 and 65535')
-        return v
+```python
+class CustomValidator:
+    def validate_model_availability(self, config):
+        """Custom validation for model availability."""
+        errors = []
+        
+        for model_name, model_config in config.models.items():
+            if model_config.provider == ModelProvider.OLLAMA:
+                # Check if Ollama model is available
+                if not self.check_ollama_model(model_name):
+                    errors.append(f"Ollama model {model_name} not available")
+        
+        return errors
 ```
 
-This configuration system provides flexibility while maintaining security and performance. Adjust settings based on your specific deployment needs. 
+## Environment-Specific Configuration
+
+### Development Configuration
+
+```python
+def setup_dev_config():
+    """Development configuration with local services."""
+    builder = ConfigBuilder()
+    
+    # Local Ollama only
+    builder.add_provider("ollama", ModelProvider.OLLAMA, {
+        "base_url": "http://localhost:11434"
+    })
+    
+    # Local models
+    builder.add_model("llama3:8b", ModelProvider.OLLAMA, ModelSize.MEDIUM,
+                     ["translation", "analysis"])
+    
+    return builder.build()
+```
+
+### Production Configuration
+
+```python
+def setup_prod_config():
+    """Production configuration with cloud services."""
+    builder = ConfigBuilder()
+    
+    # Cloud providers with API keys
+    builder.add_provider("openai", ModelProvider.OPENAI, {
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "timeout": 30
+    })
+    
+    builder.add_provider("groq", ModelProvider.GROQ, {
+        "api_key": os.getenv("GROQ_API_KEY"),
+        "timeout": 15
+    })
+    
+    # Production models
+    builder.add_model("gpt-4", ModelProvider.OPENAI, ModelSize.LARGE,
+                     ["translation", "rewriting", "review"])
+    builder.add_model("llama3-70b", ModelProvider.GROQ, ModelSize.LARGE,
+                     ["translation", "analysis"])
+    
+    return builder.build()
+```
+
+## Configuration Hot Reloading
+
+The unified configuration supports runtime updates:
+
+```python
+# Update model configuration
+config.update_model_config("gpt-4", {
+    "temperature": 0.2,
+    "max_tokens": 1500
+})
+
+# Add new provider at runtime
+config.add_provider_config("new_provider", ProviderConfig(...))
+
+# Reload configuration from file
+config.reload_from_file("config.json")
+```
+
+## Best Practices
+
+### Security
+- Use environment variables for API keys
+- Never commit secrets to version control
+- Validate all external inputs
+- Use secure defaults
+
+### Performance
+- Cache configuration objects
+- Minimize configuration lookups in hot paths
+- Use connection pooling for providers
+- Monitor provider response times
+
+### Maintainability
+- Use the ConfigBuilder for setup
+- Validate configuration at startup
+- Document custom settings
+- Use meaningful names for components
+
+### Model Selection
+- **Always use UI for model selection** - never hardcode models
+- Configure fallback strategies via UI
+- Monitor model performance and costs
+- Use appropriate model sizes for tasks
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Configuration not found**: Ensure `set_global_config()` called
+2. **Model not available**: Check provider connection and model name
+3. **API key errors**: Verify environment variables
+4. **Validation failures**: Check configuration against schema
+
+### Debug Configuration
+
+```python
+# Enable configuration debugging
+import logging
+logging.getLogger("unified_config").setLevel(logging.DEBUG)
+
+# Print configuration summary
+config = get_config()
+print(f"Models: {list(config.models.keys())}")
+print(f"Providers: {list(config.providers.keys())}")
+print(f"Agents: {list(config.agents.keys())}")
+print(f"Tools: {list(config.tools.keys())}")
+```
+
+## Migration from Legacy Configuration
+
+The unified configuration system replaces the previous scattered configuration files:
+
+- `config/settings.py` → `config/unified_config.py`
+- `config/agent_config.py` → Agent configuration in unified system
+- Various service configs → Provider configurations in unified system
+
+For migration assistance, see the [Refactoring Summary](REFACTORING_SUMMARY.md).
+
+This unified configuration system provides a solid foundation for managing complex AI agent systems while maintaining type safety and ease of use. 

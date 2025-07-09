@@ -1,386 +1,689 @@
-# MPPW MCP Examples
+# Examples - Unified Architecture
 
-This document provides practical examples for using and extending the MPPW MCP system.
+This document provides practical examples of using the MPPW-MCP unified architecture for various tasks and scenarios.
 
-## Basic Usage Examples
+## Basic Setup
 
-### 1. Making Translation Requests
+### 1. Configuration Setup
 
-#### REST API
-```bash
-curl -X POST "http://localhost:8000/api/v1/translation/translate" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "natural_query": "Get all users with their recent posts",
-    "schema_context": "type User { id: ID!, posts: [Post!]! }",
-    "model": "llama2"
-  }'
+```python
+from backend.config.unified_config import (
+    ConfigBuilder, set_global_config,
+    ModelProvider, ModelSize, AgentType, AgentCapability,
+    PromptStrategy, ToolCategory, PipelineStrategy
+)
+import os
+
+def setup_basic_config():
+    """Set up basic configuration for the unified architecture."""
+    builder = ConfigBuilder()
+    
+    # Add providers (using environment variables for API keys)
+    builder.add_provider(
+        name="openai",
+        provider_type=ModelProvider.OPENAI,
+        settings={
+            "api_key": os.getenv("OPENAI_API_KEY"),
+            "timeout": 30
+        }
+    )
+    
+    builder.add_provider(
+        name="ollama",
+        provider_type=ModelProvider.OLLAMA,
+        settings={
+            "base_url": "http://localhost:11434",
+            "timeout": 60
+        }
+    )
+    
+    # Add models (typically done via UI)
+    builder.add_model(
+        name="gpt-4",
+        provider=ModelProvider.OPENAI,
+        size=ModelSize.LARGE,
+        capabilities=["translation", "rewriting", "review"]
+    )
+    
+    builder.add_model(
+        name="llama3:8b",
+        provider=ModelProvider.OLLAMA,
+        size=ModelSize.MEDIUM,
+        capabilities=["translation", "analysis"]
+    )
+    
+    # Configure agents (models selected via UI)
+    builder.add_agent(
+        agent_type=AgentType.TRANSLATOR,
+        capabilities=[AgentCapability.TRANSLATION],
+        prompt_strategy=PromptStrategy.DETAILED,
+        max_retries=3
+    )
+    
+    # Add tools
+    builder.add_tool(
+        name="translate_query",
+        category=ToolCategory.TRANSLATION,
+        settings={"max_length": 1000}
+    )
+    
+    # Build and set global config
+    config = builder.build()
+    set_global_config(config)
+    
+    return config
+
+# Initialize configuration
+config = setup_basic_config()
 ```
 
-#### Python Client
-```python
-import httpx
+## Agent Usage Examples
 
-async def translate_query():
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/translation/translate",
-            json={
-                "natural_query": "Find active users with email verification",
-                "schema_context": "type User { id: ID!, email: String!, isActive: Boolean! }",
-                "model": "gpt-3.5-turbo"
-            }
+### 2. Simple Translation
+
+```python
+from backend.agents.unified_agents import AgentFactory, AgentContext
+
+async def simple_translation():
+    """Basic translation example using unified agents."""
+    
+    # Create a translator agent
+    agent = AgentFactory.create_agent(AgentType.TRANSLATOR)
+    
+    # Create context with translation request
+    context = AgentContext(
+        query="Hello, how are you today?",
+        session_id="example-session",
+        metadata={
+            "source_language": "en",
+            "target_language": "es",
+            "domain": "casual"
+        }
+    )
+    
+    # Execute translation
+    result = await agent.execute(context)
+    
+    if result.success:
+        print(f"Original: {context.query}")
+        print(f"Translation: {result.output}")
+        print(f"Confidence: {result.confidence:.2f}")
+        print(f"Model used: {result.metadata.get('model_used')}")
+    else:
+        print(f"Translation failed: {result.error}")
+    
+    return result
+
+# Run example
+import asyncio
+result = asyncio.run(simple_translation())
+```
+
+### 3. Pipeline Execution
+
+```python
+from backend.agents.unified_agents import PipelineExecutor, AgentContext
+
+async def pipeline_translation():
+    """Execute a complete translation pipeline."""
+    
+    executor = PipelineExecutor()
+    
+    context = AgentContext(
+        query="Translate this to French: The weather is beautiful today",
+        session_id="pipeline-example",
+        metadata={
+            "target_language": "fr",
+            "quality_level": "high"
+        }
+    )
+    
+    # Execute the translation pipeline
+    result = await executor.execute_pipeline(
+        pipeline_name="translation_pipeline",
+        context=context
+    )
+    
+    print(f"Pipeline result: {result.output}")
+    print(f"Execution time: {result.execution_time:.2f}s")
+    print(f"Pipeline steps: {result.metadata.get('pipeline_steps', [])}")
+    
+    return result
+
+# Run pipeline example
+result = asyncio.run(pipeline_translation())
+```
+
+## Provider Usage Examples
+
+### 4. Direct Provider Access
+
+```python
+from backend.services.unified_providers import get_provider_service
+from backend.services.unified_providers import GenerationRequest
+
+async def direct_provider_usage():
+    """Use providers directly for text generation."""
+    
+    provider_service = get_provider_service()
+    
+    # Create generation request
+    request = GenerationRequest(
+        prompt="Translate 'Good morning' to Spanish",
+        max_tokens=50,
+        temperature=0.3,
+        model="gpt-4"
+    )
+    
+    # Generate using specific provider
+    response = await provider_service.generate(
+        provider_name="openai",
+        model="gpt-4",
+        request=request
+    )
+    
+    print(f"Generated text: {response.text}")
+    print(f"Provider: {response.provider}")
+    print(f"Model: {response.model}")
+    print(f"Tokens used: {response.tokens_used}")
+    
+    return response
+
+# Run provider example
+response = asyncio.run(direct_provider_usage())
+```
+
+### 5. Provider Fallback
+
+```python
+async def provider_with_fallback():
+    """Example showing automatic fallback between providers."""
+    
+    provider_service = get_provider_service()
+    
+    request = GenerationRequest(
+        prompt="Explain quantum computing in simple terms",
+        max_tokens=150,
+        temperature=0.7
+    )
+    
+    # Try OpenAI first, fallback to Ollama
+    try:
+        response = await provider_service.generate(
+            provider_name="openai",
+            model="gpt-4",
+            request=request
         )
-        return response.json()
-```
-
-### 2. Using Different Model Providers
-
-```python
-from backend.services.translation_service import TranslationService
-
-# Ollama provider
-ollama_service = TranslationService(provider_name="ollama")
-result1 = await ollama_service.translate_to_graphql(
-    "Get user profiles", schema_context, model="llama2"
-)
-
-# OpenAI provider  
-openai_service = TranslationService(provider_name="openai")
-result2 = await openai_service.translate_to_graphql(
-    "Get user profiles", schema_context, model="gpt-4"
-)
-```
-
-## Customization Examples
-
-### 1. Custom Prompt Templates
-
-```python
-# backend/services/custom_prompts.py
-class EcommercePromptManager:
-    def __init__(self):
-        self.templates = {
-            "product_query": """
-You are an e-commerce GraphQL expert.
-
-Context: {{ context }}
-Schema: {{ schema }}
-
-Rules for e-commerce queries:
-- Always include product availability
-- Use pagination for product lists
-- Include price and inventory data
-- Follow camelCase conventions
-
-Query: "{{ query }}"
-
-Return JSON: {"graphql": "...", "confidence": 0.95}
-            """,
-            "user_query": """
-You are a user management expert.
-
-Generate GraphQL for: "{{ query }}"
-Schema: {{ schema }}
-
-Always include: id, email, profile.displayName
-Use fragments for user data consistency.
-            """
-        }
-    
-    def get_prompt(self, query_type: str, **kwargs) -> str:
-        from jinja2 import Template
-        template = Template(self.templates.get(query_type, self.templates["product_query"]))
-        return template.render(**kwargs)
-
-# Usage in translation service
-prompt_manager = EcommercePromptManager()
-system_prompt = prompt_manager.get_prompt(
-    "product_query",
-    query=natural_query,
-    context="Product catalog with inventory",
-    schema=schema_text
-)
-```
-
-### 2. Adding a Custom Model Provider
-
-```python
-# backend/services/huggingface_provider.py
-import aiohttp
-from .base_model_provider import BaseModelProvider, GenerationRequest, GenerationResponse
-
-class HuggingFaceProvider(BaseModelProvider):
-    def __init__(self, api_token: str):
-        self.api_token = api_token
-        self.endpoint = "https://api-inference.huggingface.co"
-    
-    async def generate(self, request: GenerationRequest) -> GenerationResponse:
-        headers = {"Authorization": f"Bearer {self.api_token}"}
-        payload = {
-            "inputs": f"{request.system_prompt}\n\n{request.prompt}",
-            "parameters": {
-                "temperature": request.temperature,
-                "max_new_tokens": request.max_tokens
-            }
-        }
-        
-        model_id = request.model or "microsoft/DialoGPT-large"
-        url = f"{self.endpoint}/models/{model_id}"
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as response:
-                result = await response.json()
-                generated_text = result[0]["generated_text"] if result else ""
-                
-                return GenerationResponse(
-                    content=generated_text,
-                    model=model_id,
-                    tokens_used=len(generated_text.split()),
-                    cost=0.0,  # Free tier
-                    metadata={"provider": "huggingface"}
-                )
-```
-
-### 3. Custom MCP Tool
-
-```python
-# backend/mcp_server/tools/plugins/schema_analyzer.py
-async def analyze_schema_complexity(arguments: dict):
-    """Analyze GraphQL schema complexity and suggest optimizations."""
-    schema_text = arguments.get("schema", "")
-    
-    # Parse schema
-    type_count = schema_text.count("type ")
-    field_count = schema_text.count(":")
-    relation_count = schema_text.count("[") + schema_text.count("!")
-    
-    complexity_score = (type_count * 2) + (field_count * 0.5) + (relation_count * 1.5)
-    
-    recommendations = []
-    if complexity_score > 100:
-        recommendations.append("Consider breaking into smaller schema modules")
-    if field_count > type_count * 10:
-        recommendations.append("Some types may have too many fields")
-    
-    return {
-        "complexity_score": complexity_score,
-        "type_count": type_count,
-        "field_count": field_count,
-        "recommendations": recommendations,
-        "schema_health": "good" if complexity_score < 50 else "needs_attention"
-    }
-
-def register_tool():
-    return {
-        "name": "analyze_schema_complexity",
-        "handler": analyze_schema_complexity,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "schema": {"type": "string", "description": "GraphQL schema to analyze"}
-            },
-            "required": ["schema"]
-        }
-    }
-```
-
-### 4. Domain-Specific Translation Strategy
-
-```python
-# backend/services/strategies/ecommerce_strategy.py
-from ..translation_service import TranslationStrategy, TranslationResult
-
-class EcommerceTranslationStrategy(TranslationStrategy):
-    """Specialized translation for e-commerce queries."""
-    
-    async def translate(self, query: str, context: str) -> TranslationResult:
-        # Classify e-commerce query type
-        query_type = self._classify_ecommerce_query(query)
-        
-        # Use specialized prompts
-        if query_type == "product_search":
-            return await self._handle_product_search(query, context)
-        elif query_type == "order_management":
-            return await self._handle_order_query(query, context)
-        elif query_type == "inventory":
-            return await self._handle_inventory_query(query, context)
-        else:
-            return await self._handle_general_query(query, context)
-    
-    def _classify_ecommerce_query(self, query: str) -> str:
-        query_lower = query.lower()
-        if any(word in query_lower for word in ["product", "item", "search", "catalog"]):
-            return "product_search"
-        elif any(word in query_lower for word in ["order", "purchase", "transaction"]):
-            return "order_management" 
-        elif any(word in query_lower for word in ["inventory", "stock", "availability"]):
-            return "inventory"
-        return "general"
-    
-    async def _handle_product_search(self, query: str, context: str) -> TranslationResult:
-        # E-commerce specific product search logic
-        prompt = f"""
-        Generate a GraphQL query for product search: "{query}"
-        
-        Always include:
-        - Product ID, name, price
-        - Availability status
-        - Images and descriptions
-        - Category information
-        - Pagination (first, after)
-        
-        Schema context: {context}
-        """
-        
-        # Use model to generate query
-        response = await self.model_provider.generate(prompt)
-        
-        return TranslationResult(
-            graphql_query=response.content,
-            confidence=0.9,
-            query_type="product_search",
-            suggestions=["Consider adding filters for price range", "Include product ratings"]
+        print(f"Used OpenAI: {response.text}")
+    except Exception as e:
+        print(f"OpenAI failed: {e}")
+        # Fallback to local model
+        response = await provider_service.generate(
+            provider_name="ollama",
+            model="llama3:8b",
+            request=request
         )
+        print(f"Fallback to Ollama: {response.text}")
+    
+    return response
 
-# Register the strategy
-TranslationService.register_strategy("ecommerce", EcommerceTranslationStrategy)
+# Run fallback example
+response = asyncio.run(provider_with_fallback())
 ```
 
-## Advanced Usage Examples
+## MCP Tool Examples
 
-### 1. Multi-Provider Comparison
+### 6. Using MCP Tools
 
 ```python
-async def compare_providers():
-    """Compare translation results from multiple providers."""
-    providers = ["ollama", "openai", "anthropic"]
-    query = "Get top-selling products with customer reviews"
-    schema = "type Product { id: ID!, name: String!, reviews: [Review!]! }"
+from backend.mcp_server.tools.unified_tools import get_tool_registry
+
+async def mcp_tool_usage():
+    """Examples of using MCP tools."""
     
-    results = {}
-    for provider in providers:
-        service = TranslationService(provider_name=provider)
-        result = await service.translate_to_graphql(query, schema)
-        results[provider] = {
-            "query": result.graphql_query,
-            "confidence": result.confidence,
-            "processing_time": result.processing_time
+    registry = get_tool_registry()
+    
+    # List available tools
+    tools = registry.list_tools()
+    print("Available tools:")
+    for tool in tools:
+        print(f"- {tool.name}: {tool.description}")
+    
+    # Use translation tool
+    translate_tool = registry.get_tool("translate_query")
+    translation_result = await translate_tool.execute({
+        "query": "Hello world",
+        "target_language": "es",
+        "context": "greeting"
+    })
+    
+    print(f"Translation tool result: {translation_result.data}")
+    
+    # Use validation tool
+    validate_tool = registry.get_tool("validate_graphql")
+    validation_result = await validate_tool.execute({
+        "query": "query { user { name email } }",
+        "schema_context": "user management"
+    })
+    
+    print(f"Validation result: {validation_result.data}")
+    
+    return [translation_result, validation_result]
+
+# Run MCP tools example
+results = asyncio.run(mcp_tool_usage())
+```
+
+## Advanced Examples
+
+### 7. Custom Agent Implementation
+
+```python
+from backend.agents.unified_agents import BaseAgent, AgentContext, AgentResult
+from backend.config.unified_config import AgentType
+
+class CustomAnalyzerAgent(BaseAgent):
+    """Custom agent for specialized analysis tasks."""
+    
+    def __init__(self, config):
+        super().__init__(config, AgentType.ANALYZER)
+    
+    async def execute(self, context: AgentContext) -> AgentResult:
+        """Execute custom analysis logic."""
+        try:
+            # Get prompt for analysis task
+            prompt = await self.get_prompt(context)
+            
+            # Generate analysis using provider
+            response = await self.generate_response(prompt)
+            
+            # Process and structure the analysis
+            analysis = self.process_analysis_response(response)
+            
+            return AgentResult(
+                success=True,
+                output=analysis,
+                confidence=0.85,
+                metadata={
+                    "analysis_type": "custom",
+                    "model_used": response.model
+                }
+            )
+            
+        except Exception as e:
+            return AgentResult(
+                success=False,
+                error=str(e),
+                confidence=0.0
+            )
+    
+    def process_analysis_response(self, response):
+        """Process the raw response into structured analysis."""
+        # Custom processing logic here
+        return {
+            "summary": response.text[:100],
+            "key_points": response.text.split("."),
+            "confidence": 0.85
         }
+
+# Register and use custom agent
+from backend.agents.unified_agents import AgentFactory
+
+# This would typically be done in the agent factory
+async def use_custom_agent():
+    """Example of using a custom agent."""
+    agent = CustomAnalyzerAgent(config)
     
-    # Analyze results
-    best_confidence = max(results.values(), key=lambda x: x["confidence"])
-    fastest = min(results.values(), key=lambda x: x["processing_time"])
+    context = AgentContext(
+        query="Analyze the sentiment of this text: I love this product!",
+        session_id="custom-example"
+    )
     
-    return {
-        "results": results,
-        "best_confidence": best_confidence,
-        "fastest": fastest
-    }
+    result = await agent.execute(context)
+    print(f"Custom analysis: {result.output}")
+    
+    return result
+
+result = asyncio.run(use_custom_agent())
 ```
 
-### 2. Batch Processing
+### 8. Batch Processing
 
 ```python
-async def batch_translate_queries():
-    """Process multiple queries in batch."""
+async def batch_translation_example():
+    """Process multiple translations in batch."""
+    
     queries = [
-        "Get all users",
-        "Find products by category", 
-        "Get order history for user",
-        "List available payment methods"
+        "Hello world",
+        "How are you?",
+        "Thank you very much",
+        "Good morning",
+        "See you later"
     ]
     
-    schema_context = "type User { orders: [Order!]! } type Product { category: Category! }"
+    agent = AgentFactory.create_agent(AgentType.TRANSLATOR)
+    results = []
     
-    # Use batch endpoint
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/v1/translation/translate/batch",
-            json={
-                "queries": queries,
-                "schema_context": schema_context,
-                "model": "gpt-3.5-turbo"
-            }
+    # Process in parallel
+    tasks = []
+    for i, query in enumerate(queries):
+        context = AgentContext(
+            query=query,
+            session_id=f"batch-{i}",
+            metadata={"target_language": "es"}
         )
-        return response.json()
+        tasks.append(agent.execute(context))
+    
+    # Wait for all translations
+    batch_results = await asyncio.gather(*tasks)
+    
+    # Display results
+    for i, result in enumerate(batch_results):
+        if result.success:
+            print(f"{queries[i]} → {result.output}")
+        else:
+            print(f"{queries[i]} → Error: {result.error}")
+    
+    return batch_results
+
+# Run batch example
+results = asyncio.run(batch_translation_example())
 ```
 
-### 3. Real-time Translation with WebSocket
+### 9. Custom Prompt Strategy
 
 ```python
-import asyncio
-import websockets
-import json
+from backend.prompts.unified_prompts import get_prompt_manager
+from backend.config.unified_config import AgentType, PromptStrategy
 
-async def real_time_translation():
-    """Real-time translation using WebSocket connection."""
-    uri = "ws://localhost:8000/ws/translate"
+async def custom_prompt_example():
+    """Example using different prompt strategies."""
     
-    async with websockets.connect(uri) as websocket:
-        # Send queries
-        queries = [
-            "Get user profile",
-            "List recent orders", 
-            "Find popular products"
-        ]
+    prompt_manager = get_prompt_manager()
+    
+    # Different prompt strategies for the same task
+    strategies = [
+        PromptStrategy.DETAILED,
+        PromptStrategy.MINIMAL,
+        PromptStrategy.CHAIN_OF_THOUGHT
+    ]
+    
+    context = {
+        "query": "Translate 'I am learning AI' to French",
+        "source_language": "English",
+        "target_language": "French",
+        "domain": "education"
+    }
+    
+    for strategy in strategies:
+        prompt = prompt_manager.get_prompt(
+            agent_type=AgentType.TRANSLATOR,
+            strategy=strategy,
+            context=context
+        )
         
-        for query in queries:
-            message = {
-                "type": "translate",
-                "data": {
-                    "natural_query": query,
-                    "schema_context": "type User { profile: Profile! }",
-                    "model": "llama2"
-                }
-            }
-            await websocket.send(json.dumps(message))
-            
-            # Receive response
-            response = await websocket.recv()
-            result = json.loads(response)
-            print(f"Query: {query}")
-            print(f"GraphQL: {result['data']['graphql_query']}")
-            print("---")
+        print(f"\n{strategy.value.upper()} STRATEGY:")
+        print(prompt[:200] + "..." if len(prompt) > 200 else prompt)
 
-# Run real-time translation
-asyncio.run(real_time_translation())
+# Run prompt strategy example
+asyncio.run(custom_prompt_example())
 ```
 
-### 4. Custom Configuration
+### 10. Configuration Validation
 
 ```python
-# config/custom_config.py
-from pydantic import BaseSettings
+from backend.config.unified_config import get_config
 
-class CustomSettings(BaseSettings):
-    # Domain-specific settings
-    domain: str = "ecommerce"
-    default_pagination_size: int = 20
-    enable_query_caching: bool = True
+def configuration_validation_example():
+    """Example of validating and debugging configuration."""
     
-    # Model preferences by use case
-    translation_models: dict = {
-        "fast": "gpt-3.5-turbo",
-        "accurate": "gpt-4", 
-        "local": "llama2",
-        "specialized": "codellama"
-    }
+    config = get_config()
     
-    # Custom prompt templates
-    custom_prompts: dict = {
-        "ecommerce": "You are an e-commerce expert...",
-        "analytics": "You are a data analytics expert...",
-        "social": "You are a social media platform expert..."
-    }
+    # Validate configuration
+    validation_result = config.validate()
     
-    class Config:
-        env_prefix = "CUSTOM_"
+    if validation_result.is_valid:
+        print("✅ Configuration is valid")
+    else:
+        print("❌ Configuration errors:")
+        for error in validation_result.errors:
+            print(f"  - {error}")
+    
+    # Display configuration summary
+    print(f"\nConfiguration Summary:")
+    print(f"Models: {list(config.models.keys())}")
+    print(f"Providers: {list(config.providers.keys())}")
+    print(f"Agents: {list(config.agents.keys())}")
+    print(f"Tools: {list(config.tools.keys())}")
+    print(f"Pipelines: {list(config.pipelines.keys())}")
+    
+    # Get model information
+    for model_name, model_config in config.models.items():
+        print(f"\nModel: {model_name}")
+        print(f"  Provider: {model_config.provider.value}")
+        print(f"  Size: {model_config.size.value}")
+        print(f"  Capabilities: {model_config.capabilities}")
 
-# Usage
-settings = CustomSettings()
-model = settings.translation_models.get("accurate", "gpt-3.5-turbo")
-prompt_template = settings.custom_prompts.get("ecommerce", "default")
+# Run configuration validation
+configuration_validation_example()
 ```
 
-These examples demonstrate the flexibility and extensibility of the MPPW MCP system. You can mix and match these patterns to create exactly the functionality you need for your specific use case. 
+## Error Handling Examples
+
+### 11. Robust Error Handling
+
+```python
+async def robust_translation_with_error_handling():
+    """Example showing comprehensive error handling."""
+    
+    agent = AgentFactory.create_agent(AgentType.TRANSLATOR)
+    
+    context = AgentContext(
+        query="Translate this complex technical text...",
+        session_id="error-handling-example",
+        metadata={
+            "max_retries": 3,
+            "timeout": 30
+        }
+    )
+    
+    try:
+        result = await agent.execute(context)
+        
+        if result.success:
+            print(f"✅ Translation successful: {result.output}")
+            
+            # Check confidence level
+            if result.confidence < 0.7:
+                print("⚠️ Low confidence translation")
+                
+            # Check for warnings
+            if result.warnings:
+                print("⚠️ Warnings:")
+                for warning in result.warnings:
+                    print(f"  - {warning}")
+        else:
+            print(f"❌ Translation failed: {result.error}")
+            
+            # Handle specific error types
+            if "timeout" in result.error.lower():
+                print("💡 Suggestion: Try with a faster model")
+            elif "api_key" in result.error.lower():
+                print("💡 Suggestion: Check your API key configuration")
+            
+    except Exception as e:
+        print(f"💥 Unexpected error: {e}")
+        
+        # Log error for debugging
+        import logging
+        logging.error(f"Translation error: {e}", exc_info=True)
+
+# Run robust error handling example
+asyncio.run(robust_translation_with_error_handling())
+```
+
+## Integration Examples
+
+### 12. FastAPI Integration
+
+```python
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from backend.agents.unified_agents import AgentFactory, AgentContext
+
+app = FastAPI(title="Unified Architecture API")
+
+class TranslationRequest(BaseModel):
+    query: str
+    target_language: str
+    session_id: str = None
+
+class TranslationResponse(BaseModel):
+    result: str
+    confidence: float
+    model_used: str
+
+@app.post("/translate", response_model=TranslationResponse)
+async def translate_endpoint(request: TranslationRequest):
+    """FastAPI endpoint using unified architecture."""
+    
+    try:
+        agent = AgentFactory.create_agent(AgentType.TRANSLATOR)
+        
+        context = AgentContext(
+            query=request.query,
+            session_id=request.session_id or "api-request",
+            metadata={"target_language": request.target_language}
+        )
+        
+        result = await agent.execute(context)
+        
+        if result.success:
+            return TranslationResponse(
+                result=result.output,
+                confidence=result.confidence,
+                model_used=result.metadata.get("model_used", "unknown")
+            )
+        else:
+            raise HTTPException(status_code=500, detail=result.error)
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# This would be run with: uvicorn main:app --reload
+```
+
+## Testing Examples
+
+### 13. Unit Testing
+
+```python
+import pytest
+from unittest.mock import AsyncMock, patch
+from backend.config.unified_config import ConfigBuilder
+from backend.agents.unified_agents import AgentFactory, AgentContext
+
+@pytest.fixture
+def test_config():
+    """Create test configuration."""
+    builder = ConfigBuilder()
+    # Add minimal test configuration
+    return builder.build()
+
+@pytest.mark.asyncio
+async def test_translator_agent(test_config):
+    """Test translator agent functionality."""
+    
+    with patch('backend.config.unified_config.get_config', return_value=test_config):
+        agent = AgentFactory.create_agent(AgentType.TRANSLATOR)
+        
+        context = AgentContext(
+            query="Hello",
+            session_id="test-session",
+            metadata={"target_language": "es"}
+        )
+        
+        # Mock the provider response
+        with patch.object(agent, 'generate_response') as mock_generate:
+            mock_generate.return_value = AsyncMock()
+            mock_generate.return_value.text = "Hola"
+            mock_generate.return_value.model = "test-model"
+            
+            result = await agent.execute(context)
+            
+            assert result.success
+            assert "Hola" in result.output
+            assert result.confidence > 0
+
+@pytest.mark.asyncio 
+async def test_pipeline_execution():
+    """Test pipeline execution."""
+    # Similar testing pattern for pipelines
+    pass
+
+# Run tests with: pytest test_examples.py -v
+```
+
+## Performance Examples
+
+### 14. Performance Monitoring
+
+```python
+import time
+import asyncio
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def performance_monitor(operation_name: str):
+    """Context manager for monitoring operation performance."""
+    start_time = time.time()
+    memory_start = None  # Could add memory monitoring
+    
+    try:
+        print(f"🚀 Starting {operation_name}...")
+        yield
+    finally:
+        end_time = time.time()
+        duration = end_time - start_time
+        print(f"✅ {operation_name} completed in {duration:.2f}s")
+
+async def performance_example():
+    """Example of monitoring performance."""
+    
+    async with performance_monitor("Batch Translation"):
+        agent = AgentFactory.create_agent(AgentType.TRANSLATOR)
+        
+        # Process multiple translations
+        tasks = []
+        for i in range(10):
+            context = AgentContext(
+                query=f"Test query {i}",
+                session_id=f"perf-test-{i}"
+            )
+            tasks.append(agent.execute(context))
+        
+        results = await asyncio.gather(*tasks)
+        
+        success_count = sum(1 for r in results if r.success)
+        avg_confidence = sum(r.confidence for r in results if r.success) / success_count
+        
+        print(f"📊 Results: {success_count}/10 successful")
+        print(f"📊 Average confidence: {avg_confidence:.2f}")
+
+# Run performance example
+asyncio.run(performance_example())
+```
+
+These examples demonstrate the power and flexibility of the unified architecture. The system provides:
+
+- **Type Safety**: All operations are type-checked
+- **Consistency**: Uniform interfaces across all components
+- **Extensibility**: Easy to add new agents, providers, and tools
+- **Reliability**: Comprehensive error handling and fallbacks
+- **Performance**: Efficient async operations and caching
+- **Testing**: Straightforward unit and integration testing
+
+For more detailed information, see:
+- [Unified Architecture Guide](UNIFIED_ARCHITECTURE_GUIDE.md)
+- [Configuration Guide](CONFIGURATION.md)
+- [Quick Start Guide](QUICK_START_UNIFIED.md) 

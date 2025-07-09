@@ -223,14 +223,10 @@ async def _stream_query(tool_name: str, request: MCPQueryRequest):
     import json
 
     try:
-        # Ensure MCP server is initialised (side-effect of get_mcp_server)
-        await get_mcp_server()
+        # Get the orchestration service directly
+        from services.enhanced_orchestration_service import get_orchestration_service, PipelineStrategy
 
-        # Access global orchestration service
-        from mcp_server import enhanced_agent as _enhanced_agent
-        from services.enhanced_orchestration_service import PipelineStrategy
-
-        orchestration = _enhanced_agent.orchestration_service
+        orchestration = get_orchestration_service()
         if orchestration is None:
             raise RuntimeError("Orchestration service not initialised")
 
@@ -238,7 +234,7 @@ async def _stream_query(tool_name: str, request: MCPQueryRequest):
             "process_query_fast": PipelineStrategy.FAST,
             "process_query_standard": PipelineStrategy.STANDARD,
             "process_query_comprehensive": PipelineStrategy.COMPREHENSIVE,
-            "process_query_adaptive": PipelineStrategy.ADAPTIVE,
+            "process_query_adaptive": PipelineStrategy.PARALLEL,  # Map adaptive to parallel
         }
 
         strategy = strategy_map.get(tool_name)

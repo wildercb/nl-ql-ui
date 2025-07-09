@@ -8,44 +8,59 @@ This package provides a sophisticated agent orchestration system with:
 - Performance monitoring and optimization
 """
 
-from .registry import AgentRegistry, agent_registry
-from .base import BaseAgent, AgentContext, AgentMetadata, AgentCapability
-from .pipeline import Pipeline, PipelineConfig, ExecutionResult
-from .context import ContextEngineering, PromptStrategy, ContextManager
+from .unified_agents import (
+    AgentFactory,
+    AgentContext,
+    AgentResult,
+    AgentType,
+    AgentCapability,
+    BaseAgent,
+    PipelineExecutor,
+    RewriterAgent,
+    TranslatorAgent,
+    ReviewerAgent,
+    AnalyzerAgent
+)
 
-# Global registry instance
-registry = agent_registry
+# Compatibility aliases
+AgentRegistry = AgentFactory
+registry = AgentFactory
+agent_registry = AgentFactory
 
 __all__ = [
     # Core classes
     "BaseAgent",
     "AgentContext", 
-    "AgentMetadata",
+    "AgentResult",
+    "AgentType",
     "AgentCapability",
     
-    # Registry system
+    # Factory and registry
+    "AgentFactory",
     "AgentRegistry",
     "registry",
+    "agent_registry",
     
     # Pipeline system
-    "Pipeline",
-    "PipelineConfig", 
-    "ExecutionResult",
+    "PipelineExecutor",
     
-    # Context engineering
-    "ContextEngineering",
-    "PromptStrategy",
-    "ContextManager"
+    # Concrete agents
+    "RewriterAgent",
+    "TranslatorAgent", 
+    "ReviewerAgent",
+    "AnalyzerAgent"
 ]
 
 def discover_agents():
-    """Auto-discover and register all agents in the agents directory."""
-    registry.discover_agents()
+    """Auto-discover and register all agents."""
+    # This is handled automatically by the unified system
+    pass
 
 def get_available_agents():
     """Get list of all registered agents."""
-    return registry.list_agents()
+    return AgentFactory.list_available_agents()
 
 def create_pipeline(config: dict):
     """Create a new pipeline from configuration."""
-    return Pipeline.from_config(config) 
+    executor = PipelineExecutor()
+    return executor 

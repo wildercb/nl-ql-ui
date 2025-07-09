@@ -1,4 +1,4 @@
-"""Main FastAPI application with MongoDB integration and comprehensive LLM tracking."""
+"""Main FastAPI application with unified architecture - NO DEFAULT MODELS."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -7,9 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
-from config.settings import get_settings
+# Import unified architecture components
 from services.database_service import initialize_database, close_database
-from services.llm_tracking_service import get_tracking_service
+
 from .middleware import (
     RateLimitMiddleware,
     LoggingMiddleware,
@@ -25,26 +25,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-settings = get_settings()
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager for startup and shutdown events."""
     
     # Startup
-    logger.info("🚀 Starting MPPW MCP API with MongoDB...")
+    logger.info("🚀 Starting MPPW MCP API with Unified Architecture...")
+    logger.info("📝 Models will be selected via UI - NO default models configured")
     
     try:
-        # Initialize MongoDB connection and Beanie ODM
+        # Initialize MongoDB connection
         await initialize_database()
         logger.info("✅ MongoDB connection initialized")
         
-        # Initialize LLM tracking service
-        tracking_service = get_tracking_service()
-        logger.info("📊 LLM tracking service initialized")
+        # Initialize unified architecture services
+        try:
+            from services.unified_providers import get_provider_service
+            provider_service = get_provider_service()
+            logger.info("🔌 Provider service initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Provider service not yet configured: {e}")
         
-        logger.info("🎉 API startup complete!")
+        try:
+            from mcp_server.tools.unified_tools import get_tool_registry
+            tool_registry = get_tool_registry()
+            tools = tool_registry.list_tools()
+            logger.info(f"🛠️ Tool registry initialized with {len(tools)} tools")
+        except Exception as e:
+            logger.warning(f"⚠️ Tool registry not yet configured: {e}")
+        
+        logger.info("🎉 API startup complete - ready for model selection via UI!")
         
     except Exception as e:
         logger.error(f"❌ Failed to start API: {e}")
@@ -68,20 +79,20 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title=settings.api.title,
-    description=settings.api.description,
-    version=settings.api.version,
-    debug=settings.api.debug,
+    title="MPPW-MCP Unified API",
+    description="Multi-Agent Pipeline Processing with Model Context Protocol - Unified Architecture (Models selected via UI)",
+    version="2.0.0",
+    debug=True,
     lifespan=lifespan
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors.origins,
-    allow_credentials=settings.cors.allow_credentials,
-    allow_methods=settings.cors.allow_methods,
-    allow_headers=settings.cors.allow_headers,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Add compression middleware
@@ -98,15 +109,15 @@ app.include_router(health.router)
 app.include_router(translation.router)
 app.include_router(validation.router)
 app.include_router(models.router)
-app.include_router(analytics.router)  # New analytics endpoints
-app.include_router(interactions.router)  # Live interactions streaming
-app.include_router(history.router)  # Query history
-app.include_router(chat.router)  # Chat functionality
-app.include_router(auth.router)  # Authentication endpoints
-app.include_router(data_query.router)  # Data query endpoint
-app.include_router(multiagent.router) # Enhanced multi-agent endpoints
-app.include_router(content_seed.router) # Data seeding endpoint
-app.include_router(mcp.router) # MCP server endpoints
+app.include_router(analytics.router)
+app.include_router(interactions.router)
+app.include_router(history.router)
+app.include_router(chat.router)
+app.include_router(auth.router)
+app.include_router(data_query.router)
+app.include_router(multiagent.router)
+app.include_router(content_seed.router)
+app.include_router(mcp.router)
 
 logger.info(f"📍 API routes registered: {len(app.routes)} endpoints")
 
@@ -122,7 +133,8 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={
             "error": "Internal server error",
             "message": "An unexpected error occurred",
-            "type": type(exc).__name__ if settings.is_development else "Error"
+            "type": type(exc).__name__,
+            "architecture": "unified"
         }
     )
 
@@ -132,27 +144,33 @@ async def root():
     """Root endpoint with API information."""
     
     return {
-        "name": settings.api.title,
-        "version": settings.api.version,
-        "description": settings.api.description,
+        "name": "MPPW-MCP Unified API",
+        "version": "2.0.0",
+        "description": "Multi-Agent Pipeline Processing with Model Context Protocol - Unified Architecture",
         "status": "healthy",
+        "architecture": "unified",
         "database": "MongoDB",
+        "model_selection": "UI-based (no defaults)",
         "features": [
+            "Unified Architecture",
+            "Type-Safe Configuration",
+            "Multi-Agent Pipeline Processing",
+            "Streamlined Provider System",
+            "MCP Tool Integration",
+            "Real-time Analytics and Monitoring",
             "Natural Language to GraphQL Translation",
             "Query Validation and Optimization",
-            "AI Model Management",
-            "Comprehensive LLM Interaction Tracking",
-            "Real-time Analytics and Monitoring",
-            "Session Management",
-            "Batch Processing"
+            "UI-Based Model Selection"
         ],
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
             "translation": "/translation",
-            "validation": "/validation", 
+            "validation": "/validation",
             "models": "/models",
-            "analytics": "/analytics"
+            "analytics": "/analytics",
+            "multiagent": "/multiagent",
+            "mcp": "/mcp"
         }
     }
 
@@ -162,28 +180,42 @@ async def get_api_info():
     """Get detailed API and system information."""
     
     try:
-        from services.database_service import get_database_service
-        from services.ollama_service import OllamaService
-        
         # Get database stats
+        from services.database_service import get_database_service
         db_service = await get_database_service()
         db_stats = await db_service.get_stats()
         
-        # Get Ollama health
-        ollama_service = OllamaService()
-        ollama_health = await ollama_service.health_check()
+        # Try to get unified architecture info if available
+        unified_info = {
+            "providers": "configured via UI",
+            "models": "selected via UI", 
+            "agents": "available",
+            "tools": "available"
+        }
         
-        # Get tracking service stats
-        tracking_service = get_tracking_service()
-        tracking_analytics = await tracking_service.get_interaction_analytics()
+        try:
+            from services.unified_providers import get_provider_service
+            provider_service = get_provider_service()
+            unified_info["providers"] = "service initialized"
+        except Exception:
+            pass
+            
+        try:
+            from mcp_server.tools.unified_tools import get_tool_registry
+            tool_registry = get_tool_registry()
+            tools = tool_registry.list_tools()
+            unified_info["tools"] = f"{len(tools)} registered"
+        except Exception:
+            pass
         
         return {
             "api": {
-                "title": settings.api.title,
-                "version": settings.api.version,
-                "environment": settings.env,
-                "debug": settings.api.debug
+                "title": "MPPW-MCP Unified API",
+                "version": "2.0.0",
+                "architecture": "unified",
+                "debug": True
             },
+            "unified_architecture": unified_info,
             "database": {
                 "type": "MongoDB",
                 "status": "connected" if db_stats.get("database") else "disconnected",
@@ -193,44 +225,18 @@ async def get_api_info():
                     for collection in db_stats.get("collections", {}).values()
                 )
             },
-            "ollama": {
-                "status": ollama_health.get("status", "unknown"),
-                "base_url": ollama_health.get("base_url"),
-                "available_models": ollama_health.get("available_models", 0),
-                "response_time": ollama_health.get("response_time", 0)
-            },
-            "tracking": {
-                "total_interactions": tracking_analytics.get("summary", {}).get("total_interactions", 0),
-                "success_rate": tracking_analytics.get("summary", {}).get("success_rate", 0),
-                "recent_24h": tracking_analytics.get("summary", {}).get("recent_24h", 0)
-            },
-            "features": {
-                "llm_tracking": settings.llm_tracking.enabled,
-                "prometheus_metrics": settings.monitoring.prometheus_metrics,
-                "rate_limiting": True,
-                "cors_enabled": True,
-                "compression": True
+            "system": {
+                "unified_architecture": True,
+                "type_safety": True,
+                "modular_design": True,
+                "extensible": True,
+                "model_selection": "UI-based"
             }
         }
         
     except Exception as e:
-        logger.error(f"Failed to get API info: {e}")
+        logger.error(f"Error getting API info: {e}")
         return {
-            "error": "Failed to retrieve system information",
+            "error": "Failed to get system information",
             "message": str(e)
-        }
-
-
-if __name__ == "__main__":
-    import uvicorn
-    
-    logger.info(f"🌐 Starting API server on {settings.api.host}:{settings.api.port}")
-    
-    uvicorn.run(
-        "api.main:app",
-        host=settings.api.host,
-        port=settings.api.port,
-        reload=settings.is_development,
-        workers=settings.api.workers if not settings.is_development else 1,
-        log_level="debug" if settings.is_development else "info"
-    ) 
+        } 

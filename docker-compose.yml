@@ -6,8 +6,8 @@ services:
     image: mppw-mcp-backend
     container_name: mppw-mcp-backend-1
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
     env_file:
@@ -32,7 +32,7 @@ services:
       - ollama
       - neo4j
     volumes:
-      - ./backend:/app
+      - ./:/app
       - ./logs:/app/logs
     working_dir: /app
     restart: unless-stopped
@@ -42,7 +42,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    command: ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/api"]
+    command: ["python", "-m", "uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app"]
 
   # FastMCP Server
   # Temporarily disable fastmcp service due to asyncio issues

@@ -11,21 +11,32 @@ Structure:
 - strategies/: Strategy-specific prompts (minimal, detailed, chain-of-thought)
 """
 
-from .manager import PromptManager
-from .loader import PromptLoader
-from .types import PromptTemplate, PromptStrategy, PromptContext
+from .unified_prompts import (
+    PromptTemplate,
+    PromptStrategy,
+    PromptTemplates,
+    UnifiedPromptManager,
+    get_prompt_manager,
+    get_prompt_for_agent,
+    load_template_from_file
+)
+
+# Compatibility aliases
+PromptManager = UnifiedPromptManager
+PromptLoader = UnifiedPromptManager
+PromptContext = dict  # Simple alias for dict
 
 __all__ = [
     'PromptManager',
     'PromptLoader', 
     'PromptTemplate',
     'PromptStrategy',
-    'PromptContext'
+    'PromptContext',
+    'PromptTemplates',
+    'UnifiedPromptManager',
+    'get_prompt_manager',
+    'get_prompt_for_agent'
 ]
 
 # Global prompt manager instance
-prompt_manager = PromptManager()
-
-def get_prompt_manager() -> PromptManager:
-    """Get the global prompt manager instance."""
-    return prompt_manager 
+prompt_manager = get_prompt_manager() 

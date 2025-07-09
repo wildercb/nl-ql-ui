@@ -1,425 +1,186 @@
-"""Enhanced Ollama service with comprehensive LLM interaction tracking."""
+"""
+Ollama Service - Compatibility layer for unified architecture.
 
-import asyncio
-import json
-import time
+This service provides backward compatibility with existing Ollama integrations
+while using the unified provider system under the hood.
+"""
+
 import logging
-from typing import Dict, List, Optional, Any, AsyncGenerator
+import asyncio
+from typing import Dict, Any, List, Optional
 import httpx
-from pydantic import BaseModel
+from dataclasses import dataclass
 
+from .unified_providers import get_provider_service
 from config.settings import get_settings
-from services.llm_tracking_service import get_tracking_service
 
 logger = logging.getLogger(__name__)
 
 
-class GenerationResult(BaseModel):
-    """Result of a text generation request."""
-    
+@dataclass
+class OllamaResponse:
+    """Response from Ollama API."""
     text: str
     model: str
-    processing_time: float
-    tokens_used: Optional[int] = None
-    prompt_tokens: Optional[int] = None
-    response_tokens: Optional[int] = None
-    finish_reason: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    processing_time: float = 0.0
+    metadata: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
 
 class OllamaService:
-    """Enhanced Ollama service with comprehensive tracking and monitoring."""
+    """
+    Ollama service that wraps the unified provider system.
+    
+    Provides backward compatibility for existing Ollama integrations.
+    """
     
     def __init__(self):
         self.settings = get_settings()
+        self.provider_service = get_provider_service()
         self.base_url = self.settings.ollama.base_url
-        self.default_model = self.settings.ollama.default_model
         self.timeout = self.settings.ollama.timeout
-        self.tracking_service = get_tracking_service()
-        
-        # HTTP client for Ollama API
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout=self.timeout),
-            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
-        )
-        
-        logger.info(f"🦙 Ollama service initialized - Base URL: {self.base_url}")
+        logger.info(f"OllamaService initialized with base URL: {self.base_url}")
     
-    async def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None) -> Dict:
-        """Make HTTP request to Ollama API with error handling."""
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
-        
-        try:
-            logger.debug(f"🌐 Making {method} request to {url}")
-            
-            if method.upper() == "GET":
-                response = await self.client.get(url)
-            elif method.upper() == "POST":
-                response = await self.client.post(url, json=data)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-            
-            response.raise_for_status()
-            return response.json()
-            
-        except httpx.HTTPStatusError as e:
-            logger.error(f"❌ Ollama API HTTP error: {e.response.status_code} - {e.response.text}")
-            raise Exception(f"Ollama API error: {e.response.status_code}")
-        except httpx.RequestError as e:
-            logger.error(f"❌ Ollama API request error: {e}")
-            raise Exception(f"Ollama connection error: {e}")
-        except Exception as e:
-            logger.error(f"❌ Unexpected Ollama API error: {e}")
-            raise Exception(f"Ollama service error: {e}")
-    
-    async def generate_response(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        stream: bool = False,
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        interaction_type: str = "generation"
-    ) -> GenerationResult:
-        """Generate response from model with comprehensive tracking."""
-        model = model or self.default_model
-        temperature = temperature or self.settings.ollama.temperature
-        max_tokens = max_tokens or self.settings.ollama.max_tokens
-        session_id = session_id or f"ollama-{int(time.time())}"
-        
-        # Build payload for Ollama
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": stream,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            }
-        }
-        
-        if system_prompt:
-            payload["system"] = system_prompt
-        
-        # Track the interaction
-        async with self.tracking_service.track_interaction(
-            session_id=session_id,
-            model=model,
-            provider="ollama",
-            interaction_type=interaction_type,
-            user_id=user_id,
-            context_data={
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "stream": stream
-            }
-        ) as tracker:
-            
-            # Set tracking data
-            tracker.set_prompt(prompt)
-            tracker.set_system_prompt(system_prompt)
-            tracker.set_parameters(temperature=temperature, max_tokens=max_tokens)
-            
-            start_time = time.time()
-            
-            try:
-                logger.debug(f"🦙 Generating response with model: {model}")
-                
-                # Make request to Ollama
-                response = await self._make_request("POST", "/api/generate", payload)
-                
-                processing_time = time.time() - start_time
-                
-                # Extract response text
-                response_text = response.get("response", "")
-                
-                # Track response
-                tracker.set_response(response_text)
-                tracker.set_performance_metrics(
-                    processing_time=processing_time,
-                    tokens_used=response.get("eval_count", 0) + response.get("prompt_eval_count", 0),
-                    prompt_tokens=response.get("prompt_eval_count", 0),
-                    response_tokens=response.get("eval_count", 0)
-                )
-                
-                # Estimate confidence based on response quality
-                confidence = self._estimate_confidence(response_text, response)
-                tracker.set_performance_metrics(confidence_score=confidence)
-                
-                logger.info(
-                    f"✅ Generated response: {len(response_text)} chars, "
-                    f"{processing_time:.2f}s, model: {model}"
-                )
-                
-                return GenerationResult(
-                    text=response_text,
-                    model=model,
-                    processing_time=processing_time,
-                    tokens_used=response.get("eval_count", 0) + response.get("prompt_eval_count", 0),
-                    prompt_tokens=response.get("prompt_eval_count", 0),
-                    response_tokens=response.get("eval_count", 0),
-                    finish_reason=response.get("done_reason"),
-                    metadata={
-                        "eval_duration": response.get("eval_duration"),
-                        "load_duration": response.get("load_duration"),
-                        "prompt_eval_duration": response.get("prompt_eval_duration"),
-                        "total_duration": response.get("total_duration")
-                    }
-                )
-                
-            except Exception as e:
-                processing_time = time.time() - start_time
-                error_message = str(e)
-                
-                # Track error
-                tracker.set_error(error_message)
-                tracker.set_performance_metrics(processing_time=processing_time)
-                
-                logger.error(f"❌ Generation failed: {error_message}")
-                raise
-    
-    async def stream_chat_completion(
-        self,
-        messages: List[Dict[str, str]],
-        model: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 2048,
-        **kwargs
-    ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Stream chat completion from Ollama with detailed model logging.
-        """
-        model = model or self.default_model
-        logger.info(f"🦙 Ollama stream_chat_completion called with model: {model}")
-        
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{self.base_url}/api/chat",
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "stream": True,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        **kwargs
-                    },
-                    headers={"Content-Type": "application/json"}
-                )
-                
-                if response.status_code != 200:
-                    logger.error(f"🦙 Ollama API error with model {model}: {response.status_code} - {response.text}")
-                    raise Exception(f"Ollama API error: {response.status_code} - {response.text}")
-                
-                logger.info(f"🦙 Ollama stream started successfully with model: {model}")
-                
-                async for line in response.aiter_lines():
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            if "message" in data:
-                                yield data
-                        except json.JSONDecodeError:
-                            continue
-                            
-        except Exception as e:
-            logger.error(f"🦙 Ollama stream_chat_completion failed with model {model}: {e}")
-            raise
-
     async def chat_completion(
         self,
         messages: List[Dict[str, str]],
-        model: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        session_id: Optional[str] = None,
-        user_id: Optional[str] = None
-    ) -> GenerationResult:
-        """Generate chat completion response with tracking."""
-        model = model or self.default_model
-        temperature = temperature or self.settings.ollama.temperature
-        max_tokens = max_tokens or self.settings.ollama.max_tokens
-        session_id = session_id or f"chat-{int(time.time())}"
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs
+    ) -> OllamaResponse:
+        """
+        Chat completion using unified provider system.
         
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            }
-        }
-        
-        # Convert messages to prompt for tracking
-        prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-        
-        async with self.tracking_service.track_interaction(
-            session_id=session_id,
-            model=model,
-            provider="ollama",
-            interaction_type="chat_completion",
-            user_id=user_id,
-            context_data={
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "message_count": len(messages)
-            }
-        ) as tracker:
+        Args:
+            messages: List of chat messages
+            model: Model name to use
+            temperature: Temperature for generation
+            max_tokens: Maximum tokens to generate
             
-            tracker.set_prompt(prompt)
-            tracker.set_parameters(temperature=temperature, max_tokens=max_tokens)
-            
-            start_time = time.time()
-            
-            try:
-                response = await self._make_request("POST", "/api/chat", payload)
-                
-                processing_time = time.time() - start_time
-                response_text = response.get("message", {}).get("content", "")
-                
-                tracker.set_response(response_text)
-                tracker.set_performance_metrics(
-                    processing_time=processing_time,
-                    tokens_used=response.get("eval_count", 0) + response.get("prompt_eval_count", 0),
-                    prompt_tokens=response.get("prompt_eval_count", 0),
-                    response_tokens=response.get("eval_count", 0)
-                )
-                
-                confidence = self._estimate_confidence(response_text, response)
-                tracker.set_performance_metrics(confidence_score=confidence)
-                
-                return GenerationResult(
-                    text=response_text,
-                    model=model,
-                    processing_time=processing_time,
-                    tokens_used=response.get("eval_count", 0) + response.get("prompt_eval_count", 0),
-                    prompt_tokens=response.get("prompt_eval_count", 0),
-                    response_tokens=response.get("eval_count", 0),
-                    finish_reason=response.get("done_reason"),
-                    metadata=response
-                )
-                
-            except Exception as e:
-                processing_time = time.time() - start_time
-                tracker.set_error(str(e))
-                tracker.set_performance_metrics(processing_time=processing_time)
-                raise
-    
-    def _estimate_confidence(self, response_text: str, response_data: Dict) -> float:
-        """Estimate confidence score based on response characteristics."""
+        Returns:
+            OllamaResponse with generated text
+        """
         try:
-            # Base confidence starts at 0.5
-            confidence = 0.5
+            # Use unified provider system
+            response = await self.provider_service.chat(
+                messages=messages,
+                model=f"ollama::{model}",  # Prefix with provider
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
             
-            # Adjust based on response length (longer responses often indicate more detail)
-            if len(response_text) > 100:
-                confidence += 0.1
-            if len(response_text) > 500:
-                confidence += 0.1
-                
-            # Adjust based on eval_count (more tokens processed suggests better quality)
-            eval_count = response_data.get("eval_count", 0)
-            if eval_count > 50:
-                confidence += 0.1
-            if eval_count > 200:
-                confidence += 0.1
-                
-            # Check for completion indicators
-            if response_data.get("done", False):
-                confidence += 0.1
-            
-            # Check for error indicators in response text
-            error_indicators = ["error", "sorry", "cannot", "unable", "don't know"]
-            if any(indicator in response_text.lower() for indicator in error_indicators):
-                confidence -= 0.2
-            
-            # Ensure confidence is within bounds
-            return max(0.0, min(1.0, confidence))
-            
-        except Exception:
-            return 0.5  # Default confidence if estimation fails
-    
-    async def list_models(self) -> List[Dict[str, Any]]:
-        """List available models."""
-        try:
-            response = await self._make_request("GET", "/api/tags")
-            models = response.get("models", [])
-            
-            logger.info(f"📋 Found {len(models)} available models")
-            return models
+            return OllamaResponse(
+                text=response.text,
+                model=model,
+                processing_time=response.processing_time,
+                metadata=response.metadata
+            )
             
         except Exception as e:
-            logger.error(f"❌ Failed to list models: {e}")
+            logger.error(f"Ollama chat completion failed: {e}")
+            return OllamaResponse(
+                text=f"Error: {str(e)}",
+                model=model,
+                processing_time=0.0,
+                metadata={"error": str(e)}
+            )
+    
+    async def generate_text(
+        self,
+        prompt: str,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs
+    ) -> OllamaResponse:
+        """
+        Generate text using unified provider system.
+        
+        Args:
+            prompt: Input prompt
+            model: Model name to use
+            temperature: Temperature for generation
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            OllamaResponse with generated text
+        """
+        try:
+            # Use unified provider system
+            response = await self.provider_service.generate(
+                prompt=prompt,
+                model=f"ollama::{model}",  # Prefix with provider
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
+            
+            return OllamaResponse(
+                text=response.text,
+                model=model,
+                processing_time=response.processing_time,
+                metadata=response.metadata
+            )
+            
+        except Exception as e:
+            logger.error(f"Ollama text generation failed: {e}")
+            return OllamaResponse(
+                text=f"Error: {str(e)}",
+                model=model,
+                processing_time=0.0,
+                metadata={"error": str(e)}
+            )
+    
+    async def get_available_models(self) -> List[Dict[str, Any]]:
+        """Get available Ollama models."""
+        try:
+            # Try to get from unified provider
+            all_models = await self.provider_service.list_all_models()
+            ollama_models = all_models.get("ollama", [])
+            
+            if ollama_models:
+                return ollama_models
+            
+            # Fallback: direct API call
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/api/tags")
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get("models", [])
+                else:
+                    logger.warning(f"Failed to get models: {response.status_code}")
+                    return []
+                    
+        except Exception as e:
+            logger.error(f"Failed to get available models: {e}")
             return []
     
-    async def show_model_info(self, model: str) -> Dict[str, Any]:
-        """Get detailed information about a specific model."""
+    async def check_connection(self) -> bool:
+        """Check if Ollama server is accessible."""
         try:
-            payload = {"name": model}
-            response = await self._make_request("POST", "/api/show", payload)
-            
-            logger.debug(f"📊 Retrieved info for model: {model}")
-            return response
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to get model info for {model}: {e}")
-            return {}
-    
-    async def pull_model(self, model: str) -> bool:
-        """Pull/download a model."""
-        try:
-            payload = {"name": model}
-            response = await self._make_request("POST", "/api/pull", payload)
-            
-            logger.info(f"⬇️ Successfully pulled model: {model}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to pull model {model}: {e}")
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(f"{self.base_url}/api/version")
+                return response.status_code == 200
+        except Exception:
             return False
     
-    async def delete_model(self, model: str) -> bool:
-        """Delete a model."""
+    async def get_model_info(self, model: str) -> Dict[str, Any]:
+        """Get information about a specific model."""
         try:
-            payload = {"name": model}
-            response = await self._make_request("DELETE", "/api/delete", payload)
-            
-            logger.info(f"🗑️ Successfully deleted model: {model}")
-            return True
-            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/show",
+                    json={"name": model}
+                )
+                if response.status_code == 200:
+                    return response.json()
+                else:
+                    return {"error": f"Model not found: {model}"}
         except Exception as e:
-            logger.error(f"❌ Failed to delete model {model}: {e}")
-            return False
-    
-    async def health_check(self) -> Dict[str, Any]:
-        """Check Ollama service health."""
-        try:
-            start_time = time.time()
-            models = await self.list_models()
-            response_time = time.time() - start_time
-            
-            return {
-                "status": "healthy",
-                "base_url": self.base_url,
-                "default_model": self.default_model,
-                "available_models": len(models),
-                "response_time": response_time,
-                "timestamp": time.time()
-            }
-            
-        except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error": str(e),
-                "base_url": self.base_url,
-                "timestamp": time.time()
-            }
-    
-    async def close(self):
-        """Close the HTTP client."""
-        await self.client.aclose()
-        logger.info("🔒 Ollama service client closed") 
+            logger.error(f"Failed to get model info: {e}")
+            return {"error": str(e)} 

@@ -1,314 +1,345 @@
-"""Translation service for natural language to GraphQL conversion."""
+"""
+Translation Service - Compatibility layer for unified architecture.
 
-import json
+This service provides backward compatibility with the existing API routes
+while using the new unified architecture under the hood.
+"""
+
 import logging
-import re
 import time
-import httpx
-import asyncio
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime
+from typing import Optional, List, Dict, Any
+from dataclasses import dataclass, field
 
-from config.settings import get_settings
-from models.translation import TranslationResult
-from config.icl_examples import get_initial_icl_examples
-from services.llm_factory import resolve_llm
+from .unified_providers import get_provider_service, GenerationRequest
+from agents.unified_agents import AgentFactory, AgentContext, AgentType
+from prompts.unified_prompts import get_prompt_manager
+from config.unified_config import get_unified_config
+from config.icl_examples import get_smart_examples, get_icl_examples
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class TranslationResult:
+    """Result from translation operation."""
+    graphql_query: str
+    confidence: float
+    explanation: str
+    model_used: str
+    processing_time: float
+    warnings: List[str] = field(default_factory=list)
+    suggested_improvements: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 class TranslationService:
-    """Service for translating natural language to GraphQL queries."""
-
-    def __init__(self):
-        self.settings = get_settings()
+    """
+    Translation service that wraps the unified architecture.
+    
+    Provides backward compatibility for existing API routes while
+    using the new unified agents and providers system.
+    """
+    
+    def __init__(self, provider_name: Optional[str] = None):
+        self.provider_service = get_provider_service()
+        self.prompt_manager = get_prompt_manager()
+        self.config = get_unified_config()
+        self.default_provider = provider_name
         
-    async def _broadcast_interaction(
-        self,
-        model: str,
-        system_prompt: str,
-        user_prompt: str,
-        raw_response: str,
-        processed_response: str,
-        processing_time: float,
-        confidence: float,
-        warnings: List[str],
-        user_id: Optional[str] = None,
-        session_id: Optional[str] = None
-    ):
-        """Broadcast model interaction to live stream."""
-        try:
-            interaction_data = {
-                'id': f"trans_{int(time.time() * 1000)}",
-                'timestamp': time.time(),
-                'model': model,
-                'type': 'translation',
-                'processing_time': processing_time,
-                'user_id': user_id,
-                'session_id': session_id,
-                
-                # Full prompt details
-                'system_prompt': system_prompt,
-                'user_prompt': user_prompt,
-                'full_prompt': f"System: {system_prompt[:200]}...\n\nUser: {user_prompt}",
-                'parameters': {
-                    'temperature': 0.3,
-                    'max_tokens': 2048,
-                    'model': model
-                },
-                
-                # Response details
-                'raw_response': raw_response,
-                'processed_response': processed_response,
-                'confidence': confidence,
-                'warnings': warnings,
-                'response_metadata': {},
-                
-                'status': 'completed',
-                'error': None,
-                'tokens_used': len(user_prompt.split()) + len(raw_response.split()),
-                'response_tokens': len(raw_response.split()),
-                'total_tokens': len(user_prompt.split()) + len(raw_response.split())
-            }
-            
-            # Send to interactions broadcast endpoint
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"http://localhost:{self.settings.api.port}/api/interactions/broadcast",
-                    json=interaction_data,
-                    timeout=5.0
-                )
-                
-        except Exception as e:
-            logger.warning(f"Failed to broadcast interaction: {e}")
-
-    def _build_system_prompt(self, schema_context: str = "", icl_examples: Optional[List[str]] = None) -> str:
-        """Build system prompt for GraphQL translation."""
-        base_prompt = """You are a GraphQL expert. Translate natural language to GraphQL queries.
-
-Rules:
-1. Use correct GraphQL syntax
-2. Match fields to query intent
-3. Return only necessary data
-
-Respond with JSON:
-{
-  "graphql": "query string",
-  "confidence": 0.0-1.0,
-  "explanation": "reasoning",
-  "warnings": ["issues"],
-  "suggestions": ["improvements"]
-}
-
-Only return JSON, no extra text."""
-
-        if schema_context:
-            base_prompt += f"\n\nSchema Context:\n{schema_context}"
-            
-        if icl_examples:
-            base_prompt += "\n\nExamples:\n"
-            for i, example in enumerate(icl_examples, 1):
-                base_prompt += f"{i}. {example}\n"
-        
-        return base_prompt
-
-    def _extract_json_from_response(self, response: str) -> Dict:
-        """Extract JSON object from model response."""
-        # Remove markdown code blocks
-        response = re.sub(r'```json\s*', '', response)
-        response = re.sub(r'```\s*', '', response)
-        
-        # Try to find JSON object in the response - improved pattern for nested structures
-        # This pattern looks for balanced braces
-        def find_balanced_json(text):
-            stack = []
-            start = -1
-            for i, char in enumerate(text):
-                if char == '{':
-                    if not stack:
-                        start = i
-                    stack.append(char)
-                elif char == '}':
-                    if stack:
-                        stack.pop()
-                        if not stack and start != -1:
-                            try:
-                                json_str = text[start:i+1]
-                                parsed = json.loads(json_str)
-                                if "graphql" in parsed:
-                                    return parsed
-                            except json.JSONDecodeError:
-                                pass
-            return None
-        
-        # Try to find balanced JSON
-        result = find_balanced_json(response)
-        if result:
-            return result
-        
-        # Fallback: try parsing the entire response
-        try:
-            return json.loads(response.strip())
-        except json.JSONDecodeError:
-            # If all else fails, return a structured error with helpful message
-            return {
-                "graphql": "# Error: Invalid or unclear query",
-                "confidence": 0.0,
-                "explanation": f"The query '{response[:100]}...' could not be understood. Please provide a clear natural language query about what data you want to retrieve.",
-                "warnings": ["Query parsing failed", "Please provide a clearer query"],
-                "suggestions": [
-                    "Try asking for specific data like 'get all users'",
-                    "Use clear language like 'find posts by author'", 
-                    "Specify what fields you want like 'show user names and emails'"
-                ]
-            }
-
-    def _validate_graphql_syntax(self, query: str) -> Tuple[bool, List[str]]:
-        """Basic GraphQL syntax validation."""
-        warnings = []
-        
-        # Check for basic GraphQL structure
-        if not query.strip():
-            return False, ["Empty query"]
-        
-        # Check for basic query structure
-        if not any(keyword in query for keyword in ['query', 'mutation', 'subscription', '{']):
-            warnings.append("Query may be missing proper GraphQL structure")
-        
-        # Check for balanced braces
-        open_braces = query.count('{')
-        close_braces = query.count('}')
-        if open_braces != close_braces:
-            warnings.append(f"Unbalanced braces: {open_braces} open, {close_braces} close")
-        
-        # Check for common issues
-        if '...' in query and 'fragment' not in query.lower():
-            warnings.append("Spread operator found but no fragment definition")
-        
-        return len(warnings) == 0, warnings
-
+        logger.info(f"TranslationService initialized with provider: {provider_name or 'auto'}")
+    
     async def translate_to_graphql(
         self,
         natural_query: str,
-        schema_context: str = "",
+        schema_context: Optional[str] = None,
+        domain: Optional[str] = None,
         model: Optional[str] = None,
-        icl_examples: Optional[List[str]] = None
-    ):
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        examples: Optional[List[Any]] = None
+    ) -> TranslationResult:
         """
-        Translate natural language query to GraphQL, yielding events for streaming.
+        Translate natural language to GraphQL (alias for translate_query).
         """
-        if not natural_query.strip():
-            raise ValueError("Natural language query cannot be empty")
-
-        model = model or self.settings.ollama.default_model
-        logger.info(f"🦙 Translation service using model: {model}")
-        
-        selected_icl_examples = icl_examples if icl_examples is not None else get_initial_icl_examples()[:3]
-        system_prompt = self._build_system_prompt(schema_context, selected_icl_examples)
-        
-        user_prompt = f"""Convert this natural language query to GraphQL:
-
-"{natural_query}"
-
-Remember to return only the JSON object with the specified structure."""
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        yield {"event": "prompt_generated", "prompt": messages}
-
-        full_response_text = ""
-        try:
-            # Determine provider dynamically
-            service, provider, stripped_model = resolve_llm(model)
-
-            logger.info(f"🔮 Starting {provider} chat completion with model: {stripped_model}")
-
-            stream = service.stream_chat_completion(
-                messages=messages,
-                model=stripped_model,
-                temperature=0.3,
-                max_tokens=2048
-            )
-            async for chunk in stream:
-                token = chunk.get("message", {}).get("content", "")
-                if token:
-                    full_response_text += token
-                    yield {"event": "agent_token", "token": token}
-            
-            logger.info(f"🔮 {provider} chat completion completed with model: {stripped_model}")
-            
-            # Final processing after stream is complete
-            result_data = self._extract_json_from_response(full_response_text)
-            
-            graphql_query = result_data.get("graphql", "")
-            confidence = float(result_data.get("confidence", 0.0))
-            is_valid, syntax_warnings = self._validate_graphql_syntax(graphql_query)
-            
-            if not is_valid:
-                confidence = max(0.0, confidence - 0.3)
-                result_data["warnings"] = result_data.get("warnings", []) + syntax_warnings
-
-            final_result = {
-                "graphql_query": graphql_query,
-                "confidence": confidence,
-                "explanation": result_data.get("explanation", ""),
-                "warnings": result_data.get("warnings", []),
-                "suggestions": result_data.get("suggestions", [])
-            }
-
-            yield {"event": "translation_complete", "result": final_result}
-
-        except Exception as e:
-            logger.error(f"Translation streaming failed with model {model}: {e}")
-            yield {"event": "error", "message": str(e)}
-
-    async def batch_translate(
-        queries: List[str],
-        schema_context: str = "",
-        model: Optional[str] = None
-    ) -> List[TranslationResult]:
-        """Translate multiple natural language queries to GraphQL in parallel."""
-        
-        service = TranslationService()
-        tasks = [
-            service.translate_to_graphql(
-                natural_query=query,
-                schema_context=schema_context,
-                model=model
-            ) 
-            for query in queries
-        ]
-        
-        results_with_prompts = await asyncio.gather(*tasks)
-        # Return only the TranslationResult object from each tuple
-        return [result for _prompt, result in results_with_prompts]
-
-def get_translation_examples() -> List[str]:
-    """
-    Returns a list of few-shot examples for ICL.
-    
-    This function demonstrates how to provide dynamic or static examples
-    to improve translation accuracy for specific domains or query patterns.
-    """
-    return get_initial_icl_examples()
-
-
-async def chat_with_model(query: str, model: str, context: List[Dict[str, Any]]) -> str:
-    """
-    A simple chat interface for direct interaction with an Ollama model.
-    This is useful for debugging, testing prompts, or direct model interaction.
-    """
-    service, _provider, stripped_model = resolve_llm(model)
-    try:
-        response = await service.chat_completion(
-            messages=context + [{"role": "user", "content": query}],
-            model=stripped_model
+        return await self.translate_query(
+            natural_query=natural_query,
+            schema_context=schema_context,
+            domain=domain,
+            model=model,
+            session_id=session_id,
+            user_id=user_id,
+            examples=examples
         )
-        return response.text
+    
+    async def translate_natural_to_graphql(
+        self,
+        natural_query: str,
+        schema_context: Optional[str] = None,
+        domain: Optional[str] = None,
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        examples: Optional[List[Any]] = None
+    ) -> TranslationResult:
+        """
+        Translate natural language to GraphQL (alias for translate_query).
+        """
+        return await self.translate_query(
+            natural_query=natural_query,
+            schema_context=schema_context,
+            domain=domain,
+            model=model,
+            session_id=session_id,
+            user_id=user_id,
+            examples=examples
+        )
+    
+    async def batch_translate(
+        self,
+        queries: List[str],
+        schema_context: Optional[str] = None,
+        domain: Optional[str] = None,
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None
+    ) -> List[TranslationResult]:
+        """
+        Translate multiple natural language queries to GraphQL.
+        """
+        results = []
+        for query in queries:
+            try:
+                result = await self.translate_query(
+                    natural_query=query,
+                    schema_context=schema_context,
+                    domain=domain,
+                    model=model,
+                    session_id=session_id,
+                    user_id=user_id
+                )
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Batch translation failed for query '{query}': {e}")
+                results.append(TranslationResult(
+                    graphql_query="",
+                    confidence=0.0,
+                    explanation=f"Translation failed: {str(e)}",
+                    model_used=model or "unknown",
+                    processing_time=0.0,
+                    warnings=[f"Error: {str(e)}"]
+                ))
+        return results
+    
+    def get_translation_examples(self, domain: str = "manufacturing", limit: int = 3) -> List[Dict[str, Any]]:
+        """
+        Get translation examples for the UI.
+        """
+        from config.icl_examples import get_icl_manager
+        
+        manager = get_icl_manager()
+        examples = manager.get_random_examples(limit)
+        
+        return [
+            {
+                "natural": ex.natural,
+                "graphql": ex.graphql,
+                "tags": ex.tags,
+                "complexity": ex.complexity_score
+            }
+            for ex in examples
+        ]
+    
+    def _build_system_prompt(self, schema_context: str = "", domain: str = "manufacturing") -> str:
+        """
+        Build system prompt for translation.
+        """
+        from config.icl_examples import get_icl_manager
+        
+        manager = get_icl_manager()
+        examples = manager.get_random_examples(3)
+        
+        examples_text = "\n\n".join([
+            f"Natural: {ex.natural}\nGraphQL: {ex.graphql}"
+            for ex in examples
+        ])
+        
+        return f"""You are an expert GraphQL query translator for manufacturing and 3D printing systems.
+
+Convert natural language queries to GraphQL queries for manufacturing data.
+
+Schema Context:
+{schema_context}
+
+Examples:
+{examples_text}
+
+Guidelines:
+- Use appropriate GraphQL syntax
+- Handle filters, aggregations, and nested queries
+- Focus on manufacturing, thermal, quality, and process data
+- Return only the GraphQL query without explanations"""
+    
+    async def switch_provider(self, provider_name: str, api_key: Optional[str] = None):
+        """Switch to a different provider."""
+        self.default_provider = provider_name
+        logger.info(f"Switched to provider: {provider_name}")
+    
+    async def switch_model(self, model: str):
+        """Switch to a different model."""
+        logger.info(f"Model preference set to: {model}")
+
+    async def translate_query(
+        self,
+        natural_query: str,
+        schema_context: Optional[str] = None,
+        domain: Optional[str] = None,
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        examples: Optional[List[Any]] = None
+    ) -> TranslationResult:
+        """
+        Main translation method using unified architecture.
+        
+        Args:
+            natural_query: The natural language query to translate
+            schema_context: GraphQL schema context
+            domain: Domain context for better translation
+            model: Model to use (optional, will use UI-selected model)
+            session_id: Session ID for tracking
+            user_id: User ID for tracking
+            examples: ICL examples for few-shot learning
+            
+        Returns:
+            TranslationResult with GraphQL query and metadata
+        """
+        start_time = time.time()
+ 
+        try:
+            # Ensure providers are registered
+            provider_service = get_provider_service()
+            if not provider_service.registry.list_providers():
+                raise RuntimeError("No LLM providers are configured. Please configure Ollama or another provider before using the translation service.")
+
+            # Create translator agent
+            agent = AgentFactory.create_agent("translator")
+            
+            if not agent:
+                raise Exception("Translator agent not available")
+            
+            # Get ICL examples if not provided
+            if not examples and domain:
+                examples = get_smart_examples(natural_query, domain, limit=3)
+            elif not examples:
+                examples = get_icl_examples("manufacturing", limit=3)
+            
+            # Ensure schema context is provided (fallback placeholder if missing)
+            if not schema_context:
+                schema_context = "type Query { thermalScans: [ThermalScan] } type ThermalScan { scanID: ID jobID: String maxTemperature: Float hotspotCoordinates: [Int] thermalImage: String }"
+
+            # Prepare context with ICL examples
+            context = AgentContext(
+                original_query=natural_query,
+                session_id=session_id or f"translation-{int(time.time())}",
+                user_id=user_id,
+                domain_context=domain or "manufacturing",
+                schema_context=schema_context or "",
+                examples=examples or [],
+                metadata={
+                    "model_override": model,
+                    "provider_override": self.default_provider
+                }
+            )
+            
+            # Execute translation
+            result = await agent.execute(context)
+            
+            if result.success:
+                processing_time = time.time() - start_time
+                
+                # Support both string and dict outputs from translator agent
+                graphql_query_val: str
+                if isinstance(result.output, str):
+                    graphql_query_val = result.output
+                elif isinstance(result.output, dict) and "graphql" in result.output:
+                    graphql_query_val = result.output["graphql"]
+                else:
+                    graphql_query_val = ""
+
+                return TranslationResult(
+                    graphql_query=graphql_query_val,
+                    confidence=result.confidence or 0.0,
+                    explanation=result.metadata.get("explanation", "Translation completed"),
+                    model_used=result.metadata.get("model_used", model or "unknown"),
+                    processing_time=processing_time,
+                    warnings=result.metadata.get("warnings", []),
+                    suggested_improvements=result.metadata.get("suggestions", []),
+                    metadata=result.metadata
+                )
+            else:
+                raise Exception(f"Translation failed: {result.error}")
+                
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            processing_time = time.time() - start_time
+            
+            # Return error result
+            return TranslationResult(
+                graphql_query="",
+                confidence=0.0,
+                explanation=f"Translation failed: {str(e)}",
+                model_used=model or "unknown",
+                processing_time=processing_time,
+                warnings=[str(e)],
+                metadata={"error": str(e)}
+            )
+
+
+# Compatibility function for existing imports
+async def chat_with_model(
+    message: str,
+    model: Optional[str] = None,
+    history: Optional[List[Dict[str, Any]]] = None,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Chat with model function for compatibility.
+    
+    Uses the unified provider system for chat completions.
+    """
+    try:
+        provider_service = get_provider_service()
+        
+        # Prepare messages
+        messages = []
+        if history:
+            for msg in history:
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": msg.get("content", "")
+                })
+        
+        messages.append({"role": "user", "content": message})
+        
+        # Generate response
+        response = await provider_service.chat(
+            messages=messages,
+            model=model or "phi3:mini",
+            **kwargs
+        )
+        
+        return {
+            "response": response.text,
+            "model": response.model,
+            "processing_time": response.processing_time,
+            "provider": response.provider
+        }
+        
     except Exception as e:
-        logger.error(f"Chat with model failed: {e}")
-        return f"Error: {e}" 
+        logger.error(f"Chat error: {e}")
+        return {
+            "response": f"Error: {str(e)}",
+            "model": model or "unknown",
+            "processing_time": 0.0,
+            "error": str(e)
+        } 
