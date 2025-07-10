@@ -1,17 +1,22 @@
 version: '3.8'
 
+# Development-optimized docker-compose configuration
+# This file is optimized for faster builds and development workflow
+
 services:
-  # Backend API Server
+  # Backend API Server (Development Optimized)
   backend:
-    image: mppw-mcp-backend
-    container_name: mppw-mcp-backend-1
+    image: mppw-mcp-backend:dev
+    container_name: mppw-mcp-backend-dev
     build:
       context: .
       dockerfile: backend/Dockerfile
       cache_from:
         - mppw-mcp-backend:latest
+        - mppw-mcp-backend:dev
       args:
         BUILDKIT_INLINE_CACHE: 1
+        NODE_ENV: development
     ports:
       - "8000:8000"
     env_file:
@@ -36,8 +41,12 @@ services:
       - ollama
       - neo4j
     volumes:
-      - ./:/app
+      - ./backend:/app/backend
+      - ./config:/app/config
       - ./logs:/app/logs
+      # Exclude node_modules and other heavy directories
+      - /app/frontend/node_modules
+      - /app/backend/venv
     working_dir: /app
     restart: unless-stopped
     healthcheck:
@@ -46,41 +55,26 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    command: ["python", "-m", "uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app"]
+    command: ["python", "-m", "uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/backend"]
 
-  # FastMCP Server
-  # Temporarily disable fastmcp service due to asyncio issues
-  # fastmcp:
-  #   build: ./backend
-  #   container_name: mppw-mcp-fastmcp
-  #   depends_on:
-  #     - mongo
-  #     - redis
-  #     - ollama
-  #   environment:
-  #     - PYTHONPATH=/app
-  #     - ENVIRONMENT=development
-  #   volumes:
-  #     - ./backend:/app
-  #     - ./config/debug.env:/app/.env
-  #     - ./logs:/app/logs
-  #   command: ["python", "cli.py"]
-  #   networks:
-  #     - mppw-network
-
-  # Frontend Vue.js Application
+  # Frontend Vue.js Application (Development Optimized)
   frontend:
-    image: mppw-mcp-frontend
-    container_name: mppw-mcp-frontend-1
+    image: mppw-mcp-frontend:dev
+    container_name: mppw-mcp-frontend-dev
     build:
       context: ./frontend
       dockerfile: Dockerfile
       cache_from:
         - mppw-mcp-frontend:latest
+        - mppw-mcp-frontend:dev
       args:
         BUILDKIT_INLINE_CACHE: 1
+        NODE_ENV: development
     ports:
       - "3000:80"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80"]
@@ -89,82 +83,79 @@ services:
       retries: 3
       start_period: 10s
 
-  # Ollama AI Model Server
+  # Ollama AI Model Server (Development Optimized)
   ollama:
     image: ollama/ollama:latest
-    container_name: mppw-mcp-ollama
+    container_name: mppw-mcp-ollama-dev
     ports:
       - "11434:11434"
     volumes:
-      - ollama:/root/.ollama
+      - ollama_dev:/root/.ollama
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 10g
-        reservations:
           memory: 8g
+        reservations:
+          memory: 4g
 
-  # MongoDB Database
+  # MongoDB Database (Development Optimized)
   mongo:
     image: mongo:7
+    container_name: mppw-mcp-mongo-dev
     environment:
       - MONGO_INITDB_DATABASE=mppw_mcp
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - mongo_dev_data:/data/db
       - ./backend/database/init.js:/docker-entrypoint-initdb.d/init.js
+    restart: unless-stopped
 
-  # Secondary MongoDB for content data
+  # Secondary MongoDB for content data (Development Optimized)
   mongo_data:
     image: mongo:7
+    container_name: mppw-mcp-mongo-data-dev
     environment:
       - MONGO_INITDB_DATABASE=mppw_content
     ports:
       - "27018:27017"
     volumes:
-      - mongo_content_data:/data/db
+      - mongo_content_dev_data:/data/db
       - ./backend/database/seed_content.js:/docker-entrypoint-initdb.d/seed_content.js
     restart: unless-stopped
 
-  # Redis for Caching and Session Management
+  # Redis for Caching and Session Management (Development Optimized)
   redis:
     image: redis:7-alpine
+    container_name: mppw-mcp-redis-dev
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_dev_data:/data
     command: redis-server --appendonly yes
+    restart: unless-stopped
 
-  # GraphQL Schema Registry (Future)
-  # schema-registry:
-  #   image: confluentinc/cp-schema-registry:latest
-  #   ports:
-  #     - "8081:8081"
-  #   environment:
-  #     - SCHEMA_REGISTRY_HOST_NAME=schema-registry
-  #     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092
-
-  # Neo4j Database
+  # Neo4j Database (Development Optimized)
   neo4j:
     image: neo4j:5.19
+    container_name: mppw-mcp-neo4j-dev
     ports:
       - "7474:7474"  # http
       - "7687:7687"  # bolt
     environment:
       - NEO4J_AUTH=neo4j/password
     volumes:
-      - neo4j_data:/data
+      - neo4j_dev_data:/data
     restart: unless-stopped
 
 volumes:
-  mongo_data:
-  redis_data:
-  ollama:
-  mongo_content_data:
-  neo4j_data:
+  mongo_dev_data:
+  redis_dev_data:
+  ollama_dev:
+  mongo_content_dev_data:
+  neo4j_dev_data:
 
 networks:
   default:
-    name: mppw-mcp-network 
+    name: mppw-mcp-dev-network 

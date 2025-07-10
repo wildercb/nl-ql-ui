@@ -159,6 +159,10 @@ class BaseProvider(ABC):
         """Chat completion. Must be implemented by subclasses."""
         pass
     
+    async def stream_chat(self, request: ChatRequest):
+        """Stream chat completion. Must be implemented by subclasses."""
+        raise NotImplementedError("stream_chat not implemented for this provider")
+    
     def _create_default_config(self) -> ProviderConfig:
         """Create a default configuration for this provider."""
         return ProviderConfig(
@@ -479,6 +483,26 @@ class OllamaProvider(BaseProvider):
             metadata=result
         )
     
+    async def stream_chat(self, request: ChatRequest):
+        """Stream chat completion using Ollama API."""
+        payload = {
+            "model": request.model,
+            "messages": [
+                {"role": msg.role, "content": msg.content}
+                for msg in request.messages
+            ],
+            "stream": request.stream,
+            "options": {
+                "temperature": request.temperature,
+                "num_predict": request.max_tokens,
+            }
+        }
+        
+        url = f"{self.config.base_url}/api/chat"
+        async with self.client.stream("POST", url, json=payload) as response:
+            async for chunk in response.aiter_text():
+                yield chunk
+    
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available Ollama models."""
         try:
@@ -567,6 +591,24 @@ class OpenAICompatibleProvider(BaseProvider):
             finish_reason=choice.get("finish_reason"),
             metadata=result
         )
+
+    async def stream_chat(self, request: ChatRequest):
+        """Stream chat completion using OpenAI-compatible API."""
+        payload = {
+            "model": request.model,
+            "messages": [
+                {"role": msg.role, "content": msg.content}
+                for msg in request.messages
+            ],
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "stream": request.stream
+        }
+        
+        url = f"{self.config.base_url}/chat/completions"
+        async with self.client.stream("POST", url, json=payload) as response:
+            async for chunk in response.aiter_text():
+                yield chunk
 
 
 # =============================================================================
@@ -769,6 +811,39 @@ class UnifiedProviderService:
             "capabilities": provider.get_capabilities().__dict__,
             "config": provider.config.__dict__
         }
+
+    async def stream_chat(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs
+    ):
+        """Stream chat completion using the appropriate provider."""
+        provider_name, model_name = self._parse_model_spec(model)
+        provider = self.registry.get_provider(provider_name)
+        
+        if not provider:
+            raise ValueError(f"Provider not found: {provider_name}")
+        
+        chat_messages = [
+            ChatMessage(role=msg["role"], content=msg["content"])
+            for msg in messages
+        ]
+        
+        request = ChatRequest(
+            messages=chat_messages,
+            model=model_name,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            **kwargs
+        )
+        
+        # Stream the response
+        async for chunk in provider.stream_chat(request):
+            yield chunk
 
 
 # =============================================================================

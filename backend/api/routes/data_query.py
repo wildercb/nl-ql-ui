@@ -24,7 +24,7 @@ async def run_data_query(
 ):
     """Run the provided GraphQL query against the content database and return JSON results."""
     try:
-        docs = await service.run_query(payload.graphql_query)
+        docs = await service.execute_query(payload.graphql_query)
         return DataQueryResponse(results=docs)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) 

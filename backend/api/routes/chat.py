@@ -99,6 +99,13 @@ async def stream_chat(
             # Messages are already in the correct format
             messages = [{"role": msg.role, "content": msg.content} for msg in request.messages]
             
+            # Yield the prompt event
+            prompt_content = build_chat_prompt(request.messages)
+            yield {
+                "event": "prompt",
+                "data": json.dumps({"prompt": prompt_content})
+            }
+
             logger.info(f"📝 Processing {len(messages)} messages for chat")
             
             # Stream the response from Ollama
@@ -122,13 +129,9 @@ async def stream_chat(
                     content = chunk['message']['content']
                     logger.debug(f"📤 Streaming chunk: {content}")
                     yield {
-                        "event": "message",
+                        "event": "token",
                         "data": json.dumps({
-                            "choices": [{
-                                "delta": {
-                                    "content": content
-                                }
-                            }]
+                            "token": content
                         })
                     }
                 

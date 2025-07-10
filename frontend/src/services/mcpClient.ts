@@ -195,10 +195,29 @@ export class MCPClient {
               }
             } catch (error) {
               console.warn('Failed to parse streaming event:', line, error);
+              // Continue processing other lines even if one fails
             }
           }
         }
       }
+      
+      // Process any remaining buffer content
+      if (buffer.trim()) {
+        try {
+          if (buffer.startsWith('data: ')) {
+            const data = JSON.parse(buffer.slice(6));
+            yield { event: data.event || 'data', data };
+          } else {
+            const event = JSON.parse(buffer);
+            yield { event: event.event || 'data', data: event };
+          }
+        } catch (error) {
+          console.warn('Failed to parse final buffer:', buffer, error);
+        }
+      }
+    } catch (error) {
+      console.error('Streaming error:', error);
+      throw new Error(`Streaming failed: ${error.message}`);
     } finally {
       reader.releaseLock();
     }

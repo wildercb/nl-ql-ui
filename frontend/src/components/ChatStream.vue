@@ -5,10 +5,10 @@
       <h3 class="text-md font-semibold text-gray-200">{{ title || 'Agent Stream' }}</h3>
       <button
         class="ml-auto text-xs px-3 py-1 rounded-md transition-colors duration-200 focus:outline-none"
-        :class="showPrompts ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
+        :class="props.showPrompts ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
         @click="togglePrompts"
       >
-        <i class="fas fa-code mr-1" />{{ showPrompts ? 'Hide Prompts' : 'Show Prompts' }}
+        <i class="fas fa-code mr-1" />{{ props.showPrompts ? 'Hide Prompts' : 'Show Prompts' }}
       </button>
     </div>
     
@@ -35,8 +35,13 @@
           <div class="w-8 h-8 mr-2 rounded-full bg-gray-700 text-white flex items-center justify-center">
             <i :class="getAgentIcon(msg.agent)" />
           </div>
-          <div class="agent-bubble p-3 rounded-lg w-full shadow-md whitespace-pre-wrap break-words">
-            <p class="font-bold text-purple-400 text-sm capitalize mb-1">{{ msg.agent }}</p>
+          <div 
+            class="agent-bubble p-3 rounded-lg w-full shadow-md whitespace-pre-wrap break-words"
+            :class="msg.isPrompt ? 'bg-purple-800 border-l-4 border-purple-400' : ''"
+          >
+            <p class="font-bold text-purple-400 text-sm capitalize mb-1">
+              {{ msg.isPrompt ? 'Prompt' : msg.agent }}
+            </p>
             <div class="text-white prose prose-sm max-w-none" v-html="renderMarkdown(msg.content)" />
             <div v-if="msg.isStreaming" class="typing-indicator">
               <span></span><span></span><span></span>
@@ -75,91 +80,145 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, computed } from 'vue';
-import { marked } from 'marked';
+import { ref, onMounted, watch, nextTick, computed } from 'vue';
+import { storeToRefs } from 'pinia';
+import { useAuthStore } from '@/stores/auth';
+import { mcpClient } from '@/services/mcpClient';
+import MarkdownIt from 'markdown-it';
 
-interface Message {
-  role: 'user' | 'agent';
-  agent?: string;
-  content: string;
-  timestamp: string;
-  isStreaming?: boolean;
-}
+const props = defineProps({
+  messages: {
+    type: Array as () => any[],
+    default: () => [],
+  },
+  loading: {
+    type: Boolean,
+    default: false,
+  },
+  title: {
+    type: String,
+    default: 'Agent Stream',
+  },
+  selectedModel: {
+    type: String,
+    default: 'phi3:mini',
+  },
+  prompts: {
+    type: Array as () => any[],
+    default: () => [],
+  },
+  showPrompts: {
+    type: Boolean,
+    default: false,
+  },
+});
 
-const props = defineProps<{
-  title?: string;
-  messages: Message[];
-  loading: boolean;
-  selectedModel?: string;
-  prompts?: any[];
-}>();
+const emit = defineEmits(['sendMessage', 'toggle-prompts']);
 
-const emit = defineEmits<{
-  sendMessage: [message: string];
-}>();
+const authStore = useAuthStore();
+const { isAuthenticated, user } = storeToRefs(authStore);
 
-const scrollArea = ref<HTMLElement | null>(null);
 const chatInput = ref('');
-const isChatProcessing = ref(false);
-const showPrompts = ref(false);
+const scrollArea = ref<HTMLElement | null>(null);
 
-const togglePrompts = () => {
-  showPrompts.value = !showPrompts.value;
-  scrollToBottom();
+const md = new MarkdownIt();
+
+const renderMarkdown = (content: string) => {
+  return md.render(content || '');
 };
 
-// Build a mapping of agent → prompt message once prompts are available
-const promptMessagesByAgent = computed<Record<string, Message>>(() => {
-  if (!showPrompts.value || !props.prompts) return {};
-  const map: Record<string, Message> = {};
-  props.prompts.forEach((p: any) => {
-    let promptContent: string;
-    if (Array.isArray(p.prompt)) {
-      promptContent = p.prompt.map((m: any) => `${m.role}: ${m.content}`).join('\n');
-    } else {
-      promptContent = typeof p.prompt === 'object' ? JSON.stringify(p.prompt, null, 2) : String(p.prompt);
-    }
-    map[p.agent] = {
-      role: 'agent',
-      agent: `prompt → ${p.agent}`,
-      content: `\u0060\u0060\u0060\n${promptContent}\n\u0060\u0060\u0060`,
-      // Use p.timestamp if provided, else current time to preserve ordering roughly
-      timestamp: p.timestamp || new Date().toLocaleTimeString(),
-      isStreaming: false
-    } as Message;
-  });
-  return map;
+const displayMessages = computed(() => {
+  let allMessages = [...props.messages];
+  
+  // If showPrompts is enabled, interleave prompts with messages
+  if (props.showPrompts && props.prompts.length > 0) {
+    const messagesWithPrompts: any[] = [];
+    
+    // Group prompts by agent for better organization
+    const promptsByAgent = props.prompts.reduce((acc, prompt) => {
+      if (!acc[prompt.agent]) {
+        acc[prompt.agent] = [];
+      }
+      acc[prompt.agent].push(prompt);
+      return acc;
+    }, {} as Record<string, any[]>);
+    
+    // Add regular messages and prompts
+    props.messages.forEach(msg => {
+      messagesWithPrompts.push(msg);
+      
+      // If this is an agent message, add its prompts after it
+      if (msg.agent && promptsByAgent[msg.agent]) {
+        promptsByAgent[msg.agent].forEach(prompt => {
+          messagesWithPrompts.push({
+            role: 'system',
+            agent: `${msg.agent}_prompt`,
+            content: `**Prompt for ${prompt.agent}:**\n\n\`\`\`\n${prompt.prompt}\n\`\`\``,
+            timestamp: prompt.timestamp,
+            isPrompt: true
+          });
+        });
+        // Remove the prompts we just added so they don't get duplicated
+        delete promptsByAgent[msg.agent];
+      }
+    });
+    
+    // Add any remaining prompts that weren't associated with messages
+    Object.entries(promptsByAgent).forEach(([agent, prompts]) => {
+      prompts.forEach(prompt => {
+        messagesWithPrompts.push({
+          role: 'system',
+          agent: `${agent}_prompt`,
+          content: `**Prompt for ${prompt.agent}:**\n\n\`\`\`\n${prompt.prompt}\n\`\`\``,
+          timestamp: prompt.timestamp,
+          isPrompt: true
+        });
+      });
+    });
+    
+    allMessages = messagesWithPrompts;
+  }
+  
+  return allMessages.map(msg => ({
+    ...msg,
+    timestamp: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '',
+  }));
 });
 
-// Interleave prompts directly before the first message of their agent
-const displayMessages = computed<Message[]>(() => {
-  if (!showPrompts.value) return props.messages;
+const isChatProcessing = computed(() => props.loading);
 
-  const inserted = new Set<string>();
-  const result: Message[] = [];
+const getAgentIcon = (agentName: string) => {
+  const icons: { [key: string]: string } = {
+    user: 'fas fa-user',
+    assistant: 'fas fa-robot',
+    system: 'fas fa-cogs',
+    mcp_pipeline: 'fas fa-project-diagram',
+    agent: 'fas fa-microchip',
+    translator: 'fas fa-language',
+    rewriter: 'fas fa-pen-fancy',
+    reviewer: 'fas fa-check-double',
+    data_query: 'fas fa-database',
+    default: 'fas fa-question-circle',
+  };
+  
+  // Handle prompt messages
+  if (agentName.endsWith('_prompt')) {
+    return 'fas fa-code';
+  }
+  
+  return icons[agentName] || icons.default;
+};
 
-  props.messages.forEach((msg) => {
-    if (
-      msg.role === 'agent' &&
-      msg.agent &&
-      promptMessagesByAgent.value[msg.agent] &&
-      !inserted.has(msg.agent)
-    ) {
-      result.push(promptMessagesByAgent.value[msg.agent]);
-      inserted.add(msg.agent);
-    }
-    result.push(msg);
-  });
+const togglePrompts = () => {
+  emit('toggle-prompts');
+};
 
-  // In case some prompts have no corresponding agent messages yet (e.g., translator prompt before response)
-  Object.keys(promptMessagesByAgent.value).forEach((agent) => {
-    if (!inserted.has(agent)) {
-      result.push(promptMessagesByAgent.value[agent]);
-    }
-  });
-
-  return result;
-});
+const sendMessage = () => {
+  if (chatInput.value.trim()) {
+    emit('sendMessage', chatInput.value);
+    chatInput.value = '';
+  }
+};
 
 const scrollToBottom = () => {
   nextTick(() => {
@@ -169,49 +228,11 @@ const scrollToBottom = () => {
   });
 };
 
-const sendMessage = async () => {
-  if (!chatInput.value.trim() || isChatProcessing.value) return;
-  
-  const message = chatInput.value.trim();
-  chatInput.value = '';
-  isChatProcessing.value = true;
-  
-  try {
-    emit('sendMessage', message);
-  } catch (error) {
-    console.error('Failed to send message:', error);
-  } finally {
-    isChatProcessing.value = false;
-  }
-};
+watch(() => props.messages, scrollToBottom, { deep: true, immediate: true });
 
-const renderMarkdown = (content: string) => {
-  if (!content) return '';
-  return marked(content, { gfm: true, breaks: true });
-};
-
-const messageClass = (msg: Message) => {
-  return msg.role === 'user' ? 'justify-end' : 'justify-start';
-};
-
-const getAgentIcon = (agentName?: string) => {
-  const icons: { [key: string]: string } = {
-    rewriter: 'fas fa-pencil-alt',
-    translator: 'fas fa-language',
-    reviewer: 'fas fa-check-double',
-    optimizer: 'fas fa-bolt',
-    system: 'fas fa-cogs',
-    prompt: 'far fa-file-alt'
-  };
-  if (agentName && agentName.startsWith('prompt')) return icons['prompt'];
-  return icons[agentName || 'system'] || 'fas fa-robot';
-};
-
-watch(() => props.prompts, scrollToBottom, { deep: true });
-watch(showPrompts, scrollToBottom);
-watch(() => props.messages, scrollToBottom, { deep: true });
-watch(() => props.loading, scrollToBottom);
-
+onMounted(() => {
+  scrollToBottom();
+});
 </script>
 
 <style scoped>

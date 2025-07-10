@@ -258,7 +258,7 @@ class UnifiedConfig:
             api_key_env_var="",  # Ollama doesn't need API key
             default_model="phi3:mini",
             supported_models=["phi3:mini", "gemma2:2b", "qwen2.5:3b", "llama3.2:3b"],
-            timeout=120.0
+            timeout=300.0  # Increased to 5 minutes to prevent timeouts
         ))
         
         self.register_provider(ProviderConfig(
@@ -306,7 +306,7 @@ class UnifiedConfig:
             capabilities=[AgentCapability.REWRITE],
             primary_model="phi3:mini",
             fallback_models=["gemma2:2b"],
-            timeout=20.0,
+            timeout=120.0,  # Increased to 2 minutes
             prompt_strategy=PromptStrategy.CHAIN_OF_THOUGHT,
             required_inputs=["original_query"]
         ))
@@ -317,7 +317,7 @@ class UnifiedConfig:
             capabilities=[AgentCapability.TRANSLATE],
             primary_model="phi3:mini",
             fallback_models=["gemma2:2b"],
-            timeout=30.0,
+            timeout=120.0,  # Increased to 2 minutes
             prompt_strategy=PromptStrategy.FEW_SHOT,
             required_inputs=["query", "schema_context"]
         ))
@@ -328,7 +328,18 @@ class UnifiedConfig:
             capabilities=[AgentCapability.REVIEW, AgentCapability.VALIDATE],
             primary_model="phi3:mini",
             fallback_models=["gemma2:2b"],
-            timeout=25.0,
+            timeout=120.0,  # Increased to 2 minutes
+            prompt_strategy=PromptStrategy.DETAILED,
+            required_inputs=["graphql_query", "original_query"]
+        ))
+        
+        self.register_agent(AgentConfig(
+            name="analyzer",
+            agent_type=AgentType.ANALYZER,
+            capabilities=[AgentCapability.ANALYZE, AgentCapability.EXTRACT],
+            primary_model="phi3:mini",
+            fallback_models=["gemma2:2b"],
+            timeout=120.0,  # Increased to 2 minutes
             prompt_strategy=PromptStrategy.DETAILED,
             required_inputs=["graphql_query", "original_query"]
         ))
@@ -348,7 +359,7 @@ class UnifiedConfig:
             strategy=PipelineStrategy.STANDARD,
             description="Standard pipeline with rewrite, translate, and review",
             agents=["rewriter", "translator", "reviewer"],
-            timeout=45.0,
+            timeout=300.0,  # Increased to 5 minutes
             optimization_level="balanced"
         ))
 
@@ -358,7 +369,7 @@ class UnifiedConfig:
             strategy=PipelineStrategy.COMPREHENSIVE,
             description="Comprehensive pipeline with rewrite, translate, review, and analysis",
             agents=["rewriter", "translator", "reviewer", "analyzer"],
-            timeout=90.0,
+            timeout=600.0,  # Increased to 10 minutes
             optimization_level="quality",
             context_sharing=True,
         ))

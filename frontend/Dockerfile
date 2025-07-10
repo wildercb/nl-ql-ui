@@ -3,11 +3,11 @@ FROM node:18-alpine as build-stage
 # Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json (if available)
+# Copy package files first for better caching
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies with devDependencies for build
+RUN npm ci && npm cache clean --force
 
 # Copy source code
 COPY . .

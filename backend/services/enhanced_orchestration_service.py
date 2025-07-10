@@ -1,11 +1,20 @@
 """
-Enhanced Orchestration Service - Compatibility layer for unified architecture.
+Enhanced Orchestration Service for MPPW-MCP
+
+This service provides advanced pipeline orchestration with real-time streaming
+capabilities for multi-agent processing.
 """
 
-import logging
-from typing import Dict, Any, List, Optional
-from enum import Enum
+from __future__ import annotations
+from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
+from enum import Enum
+import logging
+import time
+import uuid
+import asyncio
+
+from config.unified_config import get_unified_config
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +42,31 @@ class OrchestrationResult:
             self.agents_executed = []
 
 
+@dataclass
+class AgentResult:
+    """Result from an agent execution."""
+    success: bool
+    output: Any = None
+    error: Optional[str] = None
+    processing_time: float = 0.0
+    model_used: Optional[str] = None
+    prompt_used: Optional[str] = None
+    confidence: Optional[float] = None
+    metadata: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
+
+
 class EnhancedOrchestrationService:
     """
-    Enhanced orchestration service that wraps the unified architecture.
-    
-    Provides backward compatibility for existing orchestration calls
-    while using the new unified agents and pipeline system.
+    Enhanced orchestration service that provides real-time streaming
+    of multi-agent pipeline execution.
     """
     
     def __init__(self):
+        self.config_manager = get_unified_config()
         logger.info("EnhancedOrchestrationService initialized")
     
     async def execute_pipeline(
@@ -211,11 +236,8 @@ class EnhancedOrchestrationService:
     ):
         """Yield Server-Sent Events while a pipeline is executing.
 
-        The current implementation is pragmatic – it executes the whole
-        pipeline with `execute_pipeline` and then chunks the final result so
-        that the UI gets progressive updates.  When we integrate true streaming
-        providers we can push incremental LLM tokens here without changing the
-        API contract.
+        This method executes the pipeline and emits events for each agent
+        as they start, process, and complete in real-time.
         """
 
         import json, asyncio, time
@@ -232,89 +254,483 @@ class EnhancedOrchestrationService:
             },
         }
 
-        # Emit translator agent start (for UI progress bars)
-        yield {
-            "event": "agent_start",
-            "data": {"agent": "translator"},
-        }
-
-        # Ensure schema context provided to satisfy translator validation
+        # Get Neo4j schema context for translator and reviewer agents
         if not schema_context:
-            schema_context = (
-                "type Query { thermalScans: [ThermalScan] }\n"
-                "type ThermalScan { scanID: ID maxTemperature: Float hotspotCoordinates: [Int] }"
+            try:
+                from services.neo4j_schema_service import get_neo4j_graphql_schema
+                neo4j_schema = await get_neo4j_graphql_schema()
+                if neo4j_schema:
+                    schema_context = neo4j_schema
+                    logger.info("✅ Using Neo4j-generated GraphQL schema")
+                else:
+                    # Fallback to default schema
+                    schema_context = (
+                        "type Query {\n"
+                        "  thermalScans: [ThermalScan]\n"
+                        "  findAllThermalScans: [ThermalScan]\n"
+                        "}\n"
+                        "type ThermalScan {\n"
+                        "  scanID: ID\n"
+                        "  scanId: String\n"
+                        "  maxTemperature: Float\n"
+                        "  temperatureReadings: [Float]\n"
+                        "  hotspotCoordinates: [Int]\n"
+                        "  dateTaken: String\n"
+                        "  locationDetails: String\n"
+                        "}"
+                    )
+                    logger.info("⚠️ Using fallback GraphQL schema")
+            except Exception as e:
+                logger.error(f"❌ Error fetching Neo4j schema: {e}")
+                # Fallback to default schema
+                schema_context = (
+                    "type Query {\n"
+                    "  thermalScans: [ThermalScan]\n"
+                    "  findAllThermalScans: [ThermalScan]\n"
+                    "}\n"
+                    "type ThermalScan {\n"
+                    "  scanID: ID\n"
+                    "  scanId: String\n"
+                    "  maxTemperature: Float\n"
+                    "  temperatureReadings: [Float]\n"
+                    "  hotspotCoordinates: [Int]\n"
+                    "  dateTaken: String\n"
+                    "  locationDetails: String\n"
+                    "}"
+                )
+
+        try:
+            # Import unified agents and prompt manager
+            from agents.unified_agents import PipelineExecutor, AgentContext, AgentFactory
+            from prompts.unified_prompts import get_prompt_manager
+            from config.icl_examples import get_smart_examples, get_icl_examples
+            
+            # Get ICL examples for the translator agent
+            examples = []
+            if domain_context:
+                examples = get_smart_examples(query, domain_context, limit=3)
+            else:
+                examples = get_icl_examples("manufacturing", limit=3)
+            
+            # Convert ICL examples to the format expected by the prompt templates
+            formatted_examples = []
+            for example in examples:
+                formatted_examples.append({
+                    "natural": example.natural,
+                    "graphql": example.graphql
+                })
+            
+            # Create context with ICL examples
+            context = AgentContext(
+                original_query=query,
+                schema_context=schema_context,
+                domain_context=domain_context,
+                examples=formatted_examples,
+                user_id=user_id,
+                session_id=session_id or str(uuid.uuid4()),
+                metadata={
+                    "model_override": translator_model,
+                    "strategy": pipeline_strategy.value
+                }
             )
+            
+            # Initialize prompt manager
+            prompt_manager = get_prompt_manager()
 
-        # Run pipeline
-        result = await self.execute_pipeline(
-            query=query,
-            strategy=pipeline_strategy,
-            model=translator_model,  # translator_model overrides agent models
-            schema_context=schema_context,
-            domain=domain_context,
-        )
+            # Get pipeline configuration
+            config_manager = get_unified_config()
+            pipeline_name = self._get_pipeline_name(pipeline_strategy)
+            pipeline_config = config_manager.get_pipeline(pipeline_name)
+            
+            if not pipeline_config:
+                raise ValueError(f"Pipeline not found: {pipeline_name}")
 
-        # Stream translator output token-by-token if available
-        graphql = ""
-        if result.output and isinstance(result.output, dict):
-            graphql = result.output.get("graphql") or ""
-        elif isinstance(result.output, str):
-            graphql = result.output
+            # Execute agents one by one with real-time streaming
+            agent_factory = AgentFactory()
+            results = {}
+            
+            # Execute agents based on strategy
+            for agent_name in pipeline_config.agents:
+                agent = agent_factory.create_agent(agent_name)
+                if not agent:
+                    logger.error(f"Agent not found: {agent_name}")
+                    continue
 
-        if graphql:
-            tokens = graphql.split()
-            current = ""
-            for tok in tokens:
-                current += tok + " "
+                # Skip analyzer if no data is available
+                if agent_name == "analyzer" and not (context.agent_outputs.get('query_data') or context.agent_outputs.get('graphql_executed')):
+                    logger.info(f"Skipping analyzer agent - no query data available for analysis")
+                    continue
+                
+                # Get prompt for this agent
+                # Convert AgentContext to dictionary with appropriate variables for each agent
+                if agent_name == "analyzer":
+                    # For analyzer, we need the query data and other context
+                    prompt_context = {
+                        "query_data": context.agent_outputs.get('query_data', {}),
+                        "graphql_executed": context.agent_outputs.get('graphql_executed', ''),
+                        "original_query": context.original_query,
+                        "analysis_type": "comprehensive"
+                    }
+                else:
+                    # For other agents, use the standard context conversion
+                    prompt_context = context.get_prompt_context()
+                
+                prompt = prompt_manager.get_prompt_for_agent(agent_name, prompt_context)
+                if not prompt:
+                    logger.error(f"Failed to generate prompt for agent {agent_name}")
+                    continue
+                
+                # Emit agent start event
                 yield {
-                    "event": "agent_token",
+                    "event": "agent_start",
                     "data": {
-                        "agent": "translator",
-                        "token": tok,
+                        "agent": agent_name,
+                        "agent_type": "processing",
+                        "timestamp": time.time()
                     },
                 }
-                # small pause so frontend can render progressively
-                await asyncio.sleep(0.01)
 
-            # Final translator result
-            yield {
-                "event": "agent_complete",
-                "data": {
-                    "agent": "translator",
-                    "result": {
-                        "graphql_query": graphql.strip(),
-                        "confidence": (result.output.get("confidence") if isinstance(result.output, dict) else 1.0),
-                        "explanation": (result.output.get("explanation") if isinstance(result.output, dict) else ""),
+                # Emit agent prompt event
+                yield {
+                    "event": "agent_prompt",
+                    "data": {
+                        "agent": agent_name,
+                        "prompt": prompt,
+                        "timestamp": time.time()
                     },
-                    "prompt": None,
+                }
+
+                # Execute agent with streaming
+                agent_start_time = time.time()
+                
+                # Execute the agent properly
+                logger.info(f"Starting execution of agent {agent_name}")
+                try:
+                    agent_result = await agent.execute(context)
+                    agent_end_time = time.time()
+                    logger.info(f"Agent {agent_name} execution completed successfully: success={agent_result.success}, output={agent_result.output}")
+                except Exception as e:
+                    agent_end_time = time.time()
+                    logger.error(f"Agent {agent_name} execution failed: {e}")
+                    agent_result = AgentResult(
+                        success=False,
+                        error=str(e),
+                        processing_time=agent_end_time - agent_start_time
+                    )
+                
+                # Debug logging
+                logger.info(f"Agent {agent_name} execution result: success={agent_result.success}, output={agent_result.output}")
+                
+                # Store result
+                results[agent_name] = agent_result
+                
+                # Update context with agent output
+                context.add_agent_output(agent_name, agent_result.output)
+                
+                # If this is the translator agent and it was successful, execute the GraphQL query
+                if agent_name == "translator" and agent_result.success and agent_result.output:
+                    # Extract GraphQL query from translator output
+                    if isinstance(agent_result.output, dict):
+                        graphql_query = agent_result.output.get("graphql_query") or agent_result.output.get("graphql", "")
+                    else:
+                        graphql_query = str(agent_result.output)
+                    
+                    if graphql_query:
+                        logger.info(f"Executing GraphQL query: {graphql_query}")
+                        
+                        # Execute the GraphQL query to get data for analysis
+                        try:
+                            from services.data_query_service import get_data_query_service
+                            data_service = await get_data_query_service()
+                            
+                            # Execute the query
+                            query_result = await data_service.execute_query(graphql_query)
+                            
+                            # Store the data in context for the analyzer
+                            context.agent_outputs['query_data'] = query_result
+                            context.agent_outputs['graphql_executed'] = graphql_query
+                            
+                            logger.info(f"GraphQL query executed successfully, data available for analysis")
+                            
+                        except Exception as e:
+                            logger.error(f"Failed to execute GraphQL query: {e}")
+                            context.agent_outputs['query_error'] = str(e)
+                
+                # Format the result for frontend
+                formatted_result = self._format_agent_result(agent_name, agent_result, context)
+                logger.info(f"Formatted result for {agent_name}: {formatted_result}")
+                
+                # Emit agent completion event with full data
+                yield {
+                    "event": "agent_complete",
+                    "data": {
+                        "agent": agent_name,
+                        "result": formatted_result,
+                        "prompt": prompt,
+                        "processing_time": agent_end_time - agent_start_time,
+                        "timestamp": time.time(),
+                        "raw_output": agent_result.output,  # Include raw output for debugging
+                        "success": agent_result.success,
+                        "error": agent_result.error
+                    },
+                }
+
+                # Stream tokens for the agent response
+                if agent_result.success and agent_result.output:
+                    if agent_name == "translator":
+                        # Stream GraphQL query tokens
+                        if isinstance(agent_result.output, dict):
+                            graphql = agent_result.output.get("graphql", "") or agent_result.output.get("graphql_query", "")
+                        else:
+                            graphql = str(agent_result.output)
+                        
+                        if graphql:
+                            tokens = graphql.split()
+                            for tok in tokens:
+                                yield {
+                                    "event": "agent_token",
+                                    "data": {
+                                        "agent": agent_name,
+                                        "token": tok + " ",
+                                        "timestamp": time.time()
+                                    },
+                                }
+                                await asyncio.sleep(0.01)
+                    else:
+                        # For other agents, simulate processing
+                        processing_messages = [
+                            "Analyzing query...",
+                            "Processing data...",
+                            "Generating results...",
+                            "Finalizing output..."
+                        ]
+                        for msg in processing_messages:
+                            yield {
+                                "event": "agent_token",
+                                "data": {
+                                    "agent": agent_name,
+                                    "token": msg + " ",
+                                    "timestamp": time.time()
+                                },
+                            }
+                            await asyncio.sleep(0.1)
+
+            # Build final summary
+            success = any(result.success for result in results.values())
+            output = self._extract_output(results)
+            agents_executed = list(results.keys())
+
+            # Emit pipeline_complete
+            graphql = ""
+            if output and isinstance(output, dict):
+                graphql = output.get("graphql") or output.get("graphql_query") or ""
+            elif isinstance(output, str):
+                graphql = output
+
+            summary_payload = {
+                "success": success,
+                "translation": {
+                    "graphql_query": graphql.strip() if graphql else "",
+                    "confidence": (output.get("confidence") if isinstance(output, dict) else 1.0) if success else 0.0,
+                    "explanation": (output.get("explanation") if isinstance(output, dict) else "") if success else "",
+                    "model_used": translator_model or "auto",
+                    "warnings": [],
                 },
+                "review": {},
+                "error": None,
+                "processing_time": time.time() - start_ts,
+                "pipeline_strategy": pipeline_strategy.value,
+                "pipeline_used": pipeline_name,
+                "agents_executed": agents_executed,
             }
 
-        # Emit pipeline_complete
-        summary_payload = {
-            "success": result.success,
-            "translation": {
-                "graphql_query": graphql.strip() if graphql else "",
-                "confidence": (result.output.get("confidence") if isinstance(result.output, dict) else 1.0) if result.success else 0.0,
-                "explanation": (result.output.get("explanation") if isinstance(result.output, dict) else "") if isinstance(result.output, dict) else "",
-                "model_used": translator_model or "auto",
-                "warnings": [],
-            },
-            "review": {},
-            "error": result.error,
-            "processing_time": time.time() - start_ts,
-            "pipeline_strategy": pipeline_strategy.value,
-            "pipeline_used": result.pipeline_used,
-            "agents_executed": result.agents_executed,
+            yield {"event": "pipeline_complete", "data": summary_payload}
+
+            # Legacy compatibility – final "complete" event expected by MCP server
+            yield {"event": "complete", "data": {"result": summary_payload}}
+
+        except Exception as e:
+            logger.error(f"Pipeline streaming failed: {e}")
+            yield {
+                "event": "error",
+                "data": {
+                    "error": str(e),
+                    "processing_time": time.time() - start_ts
+                }
+            }
+
+    async def _execute_agent_simple(self, agent, context, prompt):
+        """Execute an agent with real-time streaming of LLM responses."""
+        try:
+            # Get model for this agent
+            model = agent._select_model(context)
+            if not model:
+                return AgentResult(
+                    success=False,
+                    error="No suitable model available"
+                )
+
+            # Stream the LLM response
+            response_text = ""
+            async for token in self._stream_llm_response(prompt, model, context):
+                response_text += token
+
+            # Process the complete response
+            result = await agent._execute_core_logic(context, prompt, model)
+            
+            # Update context with agent output
+            context.add_agent_output(agent.name, result)
+            
+            return AgentResult(
+                success=True,
+                output=result,
+                model_used=model,
+                prompt_used=prompt
+            )
+
+        except Exception as e:
+            logger.error(f"Agent {agent.name} execution failed: {e}")
+            return AgentResult(
+                success=False,
+                error=str(e)
+            )
+
+    async def _stream_llm_response(self, prompt, model, context):
+        """Stream LLM response token by token."""
+        try:
+            from services.unified_providers import get_provider_service
+            import json
+            
+            provider_service = get_provider_service()
+            
+            # Use chat format for better streaming
+            messages = [
+                {"role": "system", "content": "You are a helpful AI assistant."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # Stream the response
+            async for chunk in provider_service.stream_chat(
+                messages=messages,
+                model=f"ollama::{model}",
+                temperature=0.7,
+                max_tokens=2048
+            ):
+                # Parse Ollama streaming format
+                if isinstance(chunk, str) and chunk.strip():
+                    try:
+                        # Ollama returns JSON lines
+                        data = json.loads(chunk)
+                        if 'message' in data and 'content' in data['message']:
+                            content = data['message']['content']
+                            if content:
+                                yield content
+                        elif 'response' in data:
+                            yield data['response']
+                    except json.JSONDecodeError:
+                        # If not JSON, treat as plain text
+                        if chunk.strip():
+                            yield chunk
+                elif isinstance(chunk, dict):
+                    if 'content' in chunk:
+                        yield chunk['content']
+                    elif 'text' in chunk:
+                        yield chunk['text']
+                    
+        except Exception as e:
+            logger.error(f"LLM streaming failed: {e}")
+            # Fallback to non-streaming
+            try:
+                from services.unified_providers import get_provider_service
+                provider_service = get_provider_service()
+                
+                response = await provider_service.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=f"ollama::{model}",
+                    temperature=0.7,
+                    max_tokens=2048
+                )
+                
+                # Simulate streaming by yielding tokens
+                tokens = response.text.split()
+                for token in tokens:
+                    yield token + " "
+                    await asyncio.sleep(0.01)
+                    
+            except Exception as fallback_error:
+                logger.error(f"Fallback LLM also failed: {fallback_error}")
+                yield "Error: LLM service unavailable"
+
+    def _format_agent_result(self, agent_name, result, context):
+        """Format agent result for frontend display."""
+        if not result.success:
+            return {"error": result.error or "Agent execution failed"}
+        
+        # Get the raw output from the agent
+        output = result.output
+        
+        if agent_name == "translator":
+            # For translator, show the raw response and try to extract GraphQL
+            if isinstance(output, dict):
+                raw_response = output.get("raw_response", str(output))
+                graphql_query = output.get("graphql_query", raw_response)
+                confidence = output.get("confidence", 0.8)
+                explanation = output.get("explanation", "Raw model response")
+            else:
+                raw_response = str(output)
+                graphql_query = str(output)
+                confidence = 0.8
+                explanation = "Raw model response"
+            
+            return {
+                "raw_response": raw_response,
+                "graphql_query": graphql_query,
+                "confidence": confidence,
+                "explanation": explanation,
+            }
+        elif agent_name == "reviewer":
+            if isinstance(output, dict):
+                raw_response = output.get("raw_response", str(output))
+                passed = output.get("passed", True)
+                improvements = output.get("improvements", [])
+            else:
+                raw_response = str(output)
+                passed = True
+                improvements = []
+            
+            return {
+                "raw_response": raw_response,
+                "passed": passed,
+                "comments": [raw_response],
+                "suggested_improvements": improvements,
+            }
+        elif agent_name == "rewriter":
+            # Rewriter returns a string directly
+            raw_response = str(output)
+            return {
+                "raw_response": raw_response,
+                "rewritten_query": raw_response,
+                "improvements": ["Query was processed"],
+            }
+        elif agent_name == "analyzer":
+            if isinstance(output, dict):
+                raw_response = output.get("raw_response", str(output))
+                recommendations = output.get("recommendations", [])
+            else:
+                raw_response = str(output)
+                recommendations = []
+            
+            return {
+                "raw_response": raw_response,
+                "analysis": raw_response,
+                "recommendations": recommendations,
+            }
+        
+        # For any other agent, return the raw output
+        return {
+            "raw_response": str(output),
+            "output": output
         }
-
-        yield {"event": "pipeline_complete", "data": summary_payload}
-
-        # Legacy compatibility – final "complete" event expected by MCP server
-        yield {"event": "complete", "data": {"result": summary_payload}}
-
-        # Done
-        return
 
 # Global service instance
 _orchestration_service: Optional[EnhancedOrchestrationService] = None

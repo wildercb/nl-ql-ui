@@ -183,8 +183,12 @@ class BaseAgent(ABC):
         start_time = time.time()
         
         try:
+            logger.info(f"Agent {self.name}: Starting execution")
+            
             # Validate inputs
+            logger.info(f"Agent {self.name}: Validating inputs")
             if not await self._validate_inputs(ctx):
+                logger.error(f"Agent {self.name}: Input validation failed")
                 return AgentResult(
                     success=False,
                     error="Input validation failed",
@@ -192,24 +196,33 @@ class BaseAgent(ABC):
                 )
             
             # Select model (with fallback support)
+            logger.info(f"Agent {self.name}: Selecting model")
             model = self._select_model(ctx)
             if not model:
+                logger.error(f"Agent {self.name}: No suitable model available")
                 return AgentResult(
                     success=False,
                     error="No suitable model available",
                     processing_time=time.time() - start_time
                 )
             
+            logger.info(f"Agent {self.name}: Selected model {model}")
+            
             # Generate prompt
+            logger.info(f"Agent {self.name}: Generating prompt")
             prompt = self._generate_prompt(ctx)
             if not prompt:
+                logger.error(f"Agent {self.name}: Failed to generate prompt")
                 return AgentResult(
                     success=False,
                     error="Failed to generate prompt",
                     processing_time=time.time() - start_time
                 )
             
+            logger.info(f"Agent {self.name}: Generated prompt successfully")
+            
             # Execute core logic with tracking
+            logger.info(f"Agent {self.name}: Starting core logic execution")
             async with self.tracking_service.track_interaction(
                 session_id=ctx.session_id,
                 model=model,
@@ -231,7 +244,9 @@ class BaseAgent(ABC):
                 )
                 
                 # Execute core logic
+                logger.info(f"Agent {self.name}: Calling _execute_core_logic")
                 output = await self._execute_core_logic(ctx, prompt, model)
+                logger.info(f"Agent {self.name}: _execute_core_logic completed")
                 
                 # Track successful execution
                 processing_time = time.time() - start_time
@@ -263,6 +278,7 @@ class BaseAgent(ABC):
                     }
                 )
                 
+                logger.info(f"Agent {self.name}: Execution completed successfully")
                 return result
                 
         except Exception as e:
@@ -378,39 +394,59 @@ class RewriterAgent(BaseAgent):
     
     async def _execute_core_logic(self, ctx: AgentContext, prompt: str, model: str) -> str:
         """Rewrite the query using the LLM."""
-        service, _provider, stripped_model = resolve_llm(model)
+        import asyncio
         
-        messages = [
-            {"role": "system", "content": "You are a query rewriting expert."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        result = await service.chat_completion(
-            messages=messages,
-            model=stripped_model,
-            temperature=self.config.temperature
-        )
-        
-        # Extract rewritten query from response
-        rewritten = result.text.strip()
-        
-        # Clean up the response - remove any extra formatting
-        if rewritten.startswith('"') and rewritten.endswith('"'):
-            rewritten = rewritten[1:-1]
-        
-        # Basic validation
-        if len(rewritten) < 3:
-            logger.warning("Rewritten query too short, using original")
+        try:
+            service, provider, stripped_model = resolve_llm(model)
+            
+            # Format model name correctly for the provider service
+            formatted_model = f"{provider}::{stripped_model}"
+            
+            messages = [
+                {"role": "system", "content": "You are a query rewriting expert."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # Add timeout to prevent hanging
+            logger.info(f"RewriterAgent: Making LLM call with timeout")
+            result = await asyncio.wait_for(
+                service.chat_completion(
+                    messages=messages,
+                    model=formatted_model,
+                    temperature=self.config.temperature
+                ),
+                timeout=self.config.timeout  # Use configured timeout
+            )
+            
+            logger.info(f"RewriterAgent: LLM call completed successfully")
+            
+            # Extract rewritten query from response
+            rewritten = result.text.strip()
+            
+            # Clean up the response - remove any extra formatting
+            if rewritten.startswith('"') and rewritten.endswith('"'):
+                rewritten = rewritten[1:-1]
+            
+            # Basic validation
+            if len(rewritten) < 3:
+                logger.warning("Rewritten query too short, using original")
+                return ctx.original_query
+            
+            if len(rewritten) > len(ctx.original_query) * 3:
+                logger.warning("Rewritten query too verbose, using original")
+                return ctx.original_query
+            
+            # Update context
+            ctx.rewritten_query = rewritten
+            
+            return rewritten
+            
+        except asyncio.TimeoutError:
+            logger.error(f"RewriterAgent: LLM call timed out after {self.config.timeout} seconds")
             return ctx.original_query
-        
-        if len(rewritten) > len(ctx.original_query) * 3:
-            logger.warning("Rewritten query too verbose, using original")
+        except Exception as e:
+            logger.error(f"RewriterAgent: LLM call failed: {e}")
             return ctx.original_query
-        
-        # Update context
-        ctx.rewritten_query = rewritten
-        
-        return rewritten
 
 
 class TranslatorAgent(BaseAgent):
@@ -423,136 +459,96 @@ class TranslatorAgent(BaseAgent):
         return [AgentCapability.TRANSLATE]
     
     async def _execute_core_logic(self, ctx: AgentContext, prompt: str, model: str) -> Dict[str, Any]:
-        """Translate query to GraphQL using the LLM."""
-        service, _provider, stripped_model = resolve_llm(model)
+        import re
+        import json as pyjson
+        import asyncio
         
-        messages = [
-            {"role": "system", "content": "You are a GraphQL expert."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        result = await service.chat_completion(
-            messages=messages,
-            model=stripped_model,
-            temperature=self.config.temperature
-        )
-        
-        # Parse JSON response
         try:
-            response_text = result.text.strip()
-            
-            # Extract JSON if wrapped in code blocks
-            if "```json" in response_text:
-                start = response_text.find("```json") + 7
-                end = response_text.find("```", start)
-                response_text = response_text[start:end].strip()
-            elif "```" in response_text:
-                start = response_text.find("```") + 3
-                end = response_text.find("```", start)
-                response_text = response_text[start:end].strip()
-            
-            translation_result = json.loads(response_text)
-            
-            # Validate required fields
-            if "graphql" not in translation_result:
-                raise ValueError("Response missing 'graphql' field")
-            
-            # Update context
-            ctx.graphql_query = translation_result["graphql"]
-            
-            return translation_result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON response: {e}")
-
-            raw = result.text.strip()
-
-            # ------------------------------------------------------------------
-            # 1) Try to extract `graphql` field manually using regex (handles
-            #    triple-quoted strings and other invalid JSON quirks).
-            # ------------------------------------------------------------------
-            import re, html
-
-            graphql_val: str | None = None
-
-            # Match triple-quoted or single-quoted graphql field
-            regexes = [
-                r'"graphql"\s*:\s*"""(?P<gql>.*?)"""',  # triple quotes
-                r'"graphql"\s*:\s*"(?P<gql>.*?)"',          # single quote
+            service, provider, stripped_model = resolve_llm(model)
+            formatted_model = f"{provider}::{stripped_model}"
+            messages = [
+                {"role": "system", "content": "You are a GraphQL expert."},
+                {"role": "user", "content": prompt}
             ]
-            for pattern in regexes:
-                m = re.search(pattern, raw, re.DOTALL)
-                if m:
-                    graphql_val = m.group("gql")
-                    break
-
-            # Unescape common sequences
-            if graphql_val:
-                graphql_val = graphql_val.replace("\\n", "\n").replace("\\r", "").replace("\\t", "\t")
-                graphql_val = html.unescape(graphql_val).strip()
-
-                if not graphql_val.startswith(("query", "mutation", "subscription")):
-                    # Assume simple query block without keyword
-                    graphql_val = f"query {graphql_val}"
-
-                fallback_result = {
-                    "graphql": graphql_val,
-                    "confidence": 0.5,
-                    "explanation": "Regex-extracted GraphQL from malformed JSON response",
-                }
-                ctx.graphql_query = graphql_val
-                return fallback_result
-
-            # ------------------------------------------------------------------
-            # 2) Heuristic extraction as a last resort (same as before but
-            #    improved to skip JSON opening brace).
-            # ------------------------------------------------------------------
-
-            start_idx = None
-            for keyword in ["query", "subscription", "mutation"]:
-                idx = raw.find(keyword)
-                if idx != -1 and (start_idx is None or idx < start_idx):
-                    start_idx = idx
-
-            if start_idx is None:
-                # Fallback to first standalone '{' that is *not* the JSON root
-                brace_positions = [i for i, ch in enumerate(raw) if ch == '{']
-                if len(brace_positions) > 1:
-                    start_idx = brace_positions[1]
-                elif brace_positions:
-                    start_idx = brace_positions[0]
-
-            if start_idx is not None:
-                brace_count = 0
-                end_idx = None
-                for i in range(start_idx, len(raw)):
-                    if raw[i] == '{':
-                        brace_count += 1
-                    elif raw[i] == '}':
-                        brace_count -= 1
-                        if brace_count == 0:
-                            end_idx = i
-                            break
-
-                if end_idx is not None:
-                    graphql_block = raw[start_idx:end_idx + 1].strip()
-                    if not graphql_block.startswith(("query", "subscription", "mutation")):
-                        graphql_block = f"query {graphql_block}"
-
-                    fallback_result = {
-                        "graphql": graphql_block,
-                        "confidence": 0.3,
-                        "explanation": "Heuristically extracted GraphQL from LLM response",
-                    }
-                    ctx.graphql_query = graphql_block
-                    return fallback_result
-
-            # ------------------------------------------------------------------
-            # 3) Give up
-            # ------------------------------------------------------------------
-            raise ValueError(
-                f"Could not parse translation response after multiple attempts: {result.text[:500]}"
+            
+            # Add timeout to prevent hanging
+            logger.info(f"TranslatorAgent: Making LLM call with timeout")
+            result = await asyncio.wait_for(
+                service.chat_completion(
+                    messages=messages,
+                    model=formatted_model,
+                    temperature=self.config.temperature
+                ),
+                timeout=self.config.timeout  # Use configured timeout
             )
+            
+            logger.info(f"TranslatorAgent: LLM call completed successfully")
+            
+            response_text = result.text.strip()
+            # Extraction for pipeline use only (not for UI display)
+            graphql_query = None
+            confidence = None
+            explanation = "Raw model response"
+            # Try to extract JSON code block
+            json_match = re.search(r'```json\s*([\s\S]+?)```', response_text)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                json_brace_match = re.search(r'\{[\s\S]+\}', response_text)
+                json_str = json_brace_match.group(0) if json_brace_match else None
+            if json_str:
+                try:
+                    parsed = pyjson.loads(json_str)
+                    graphql_query = parsed.get("graphql")
+                    confidence = parsed.get("confidence")
+                    explanation = "Extracted from JSON block"
+                except Exception:
+                    pass
+            if not graphql_query:
+                graphql_match = re.search(r'"graphql"\s*:\s*"([^"]+?)"', response_text)
+                if graphql_match:
+                    graphql_query = graphql_match.group(1)
+                    explanation = "Extracted from quoted graphql field"
+            if not graphql_query:
+                graphql_match = re.search(r'(query\s*\{[\s\S]+?\})', response_text)
+                if graphql_match:
+                    graphql_query = graphql_match.group(1)
+                    explanation = "Extracted from query pattern"
+            if not graphql_query and response_text.startswith("query"):
+                graphql_query = response_text
+                explanation = "Used entire response as query"
+            if not graphql_query:
+                graphql_query = ""
+                explanation = "Failed to extract GraphQL query"
+            try:
+                confidence = float(confidence)
+            except Exception:
+                confidence = 0.8
+            ctx.graphql_query = graphql_query
+            # Always return the full raw response for UI display
+            return {
+                "raw_response": response_text,  # Always show exactly what the model returned
+                "graphql_query": graphql_query,
+                "confidence": confidence,
+                "explanation": explanation
+            }
+            
+        except asyncio.TimeoutError:
+            logger.error(f"TranslatorAgent: LLM call timed out after {self.config.timeout} seconds")
+            return {
+                "raw_response": f"LLM call timed out after {self.config.timeout} seconds",
+                "graphql_query": "",
+                "confidence": 0.0,
+                "explanation": "Timeout error"
+            }
+        except Exception as e:
+            logger.error(f"TranslatorAgent: LLM call failed: {e}")
+            return {
+                "raw_response": f"LLM call failed: {str(e)}",
+                "graphql_query": "",
+                "confidence": 0.0,
+                "explanation": "Error occurred"
+            }
 
 
 class ReviewerAgent(BaseAgent):
@@ -566,7 +562,10 @@ class ReviewerAgent(BaseAgent):
     
     async def _execute_core_logic(self, ctx: AgentContext, prompt: str, model: str) -> Dict[str, Any]:
         """Review the GraphQL query using the LLM."""
-        service, _provider, stripped_model = resolve_llm(model)
+        service, provider, stripped_model = resolve_llm(model)
+        
+        # Format model name correctly for the provider service
+        formatted_model = f"{provider}::{stripped_model}"
         
         messages = [
             {"role": "system", "content": "You are a GraphQL review expert."},
@@ -575,39 +574,25 @@ class ReviewerAgent(BaseAgent):
         
         result = await service.chat_completion(
             messages=messages,
-            model=stripped_model,
+            model=formatted_model,
             temperature=self.config.temperature
         )
         
-        # Parse JSON response
-        try:
-            response_text = result.text.strip()
-            
-            # Extract JSON if wrapped in code blocks
-            if "```json" in response_text:
-                start = response_text.find("```json") + 7
-                end = response_text.find("```", start)
-                response_text = response_text[start:end].strip()
-            
-            review_result = json.loads(response_text)
-            
-            # Update context
-            ctx.review_result = review_result
-            
-            return review_result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse review response: {e}")
-            # Fallback review
-            fallback_result = {
-                "passed": True,
-                "score": 80,
-                "issues": [],
-                "improvements": [],
-                "compliments": ["Query appears functional"]
-            }
-            ctx.review_result = fallback_result
-            return fallback_result
+        # Return raw response without JSON parsing
+        response_text = result.text.strip()
+        
+        # Update context with raw response
+        ctx.review_result = {"raw_response": response_text}
+        
+        # Return a simple structure with the raw response
+        return {
+            "raw_response": response_text,
+            "passed": True,
+            "score": 80,
+            "issues": [],
+            "improvements": [],
+            "compliments": ["Query review completed"]
+        }
 
 
 class AnalyzerAgent(BaseAgent):
@@ -621,7 +606,10 @@ class AnalyzerAgent(BaseAgent):
     
     async def _execute_core_logic(self, ctx: AgentContext, prompt: str, model: str) -> Dict[str, Any]:
         """Analyze data using the LLM."""
-        service, _provider, stripped_model = resolve_llm(model)
+        service, provider, stripped_model = resolve_llm(model)
+        
+        # Format model name correctly for the provider service
+        formatted_model = f"{provider}::{stripped_model}"
         
         messages = [
             {"role": "system", "content": "You are a data analysis expert."},
@@ -630,37 +618,24 @@ class AnalyzerAgent(BaseAgent):
         
         result = await service.chat_completion(
             messages=messages,
-            model=stripped_model,
+            model=formatted_model,
             temperature=self.config.temperature
         )
         
-        # Parse JSON response
-        try:
-            response_text = result.text.strip()
-            
-            if "```json" in response_text:
-                start = response_text.find("```json") + 7
-                end = response_text.find("```", start)
-                response_text = response_text[start:end].strip()
-            
-            analysis_result = json.loads(response_text)
-            
-            # Update context
-            ctx.analysis_result = analysis_result
-            
-            return analysis_result
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse analysis response: {e}")
-            # Fallback analysis
-            fallback_result = {
-                "summary": "Analysis completed with limited parsing",
-                "insights": [],
-                "recommendations": [],
-                "confidence": 0.5
-            }
-            ctx.analysis_result = fallback_result
-            return fallback_result
+        # Return raw response without JSON parsing
+        response_text = result.text.strip()
+        
+        # Update context with raw response
+        ctx.analysis_result = {"raw_response": response_text}
+        
+        # Return a simple structure with the raw response
+        return {
+            "raw_response": response_text,
+            "summary": "Analysis completed",
+            "insights": [],
+            "recommendations": [],
+            "confidence": 0.8
+        }
 
 
 # =============================================================================

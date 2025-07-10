@@ -9,29 +9,37 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies in a single layer
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
+# Copy only requirements first for better caching
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
-COPY . .
+# Install Python dependencies with optimizations
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Install the project in editable mode so that "backend" and other
-# packages resolve properly inside the container
+# Copy only necessary files for the build
+# Copy backend directory first for better layer caching
+COPY backend/ ./backend/
+COPY setup.py ./
+COPY README.md ./
+
+# Install the project in editable mode
 RUN pip install --no-cache-dir -e .
 
-# .env handled via docker-compose env_file
-
-# Create non-root user
+# Create non-root user (moved after pip install to avoid permission issues)
 RUN adduser --disabled-password --gecos '' appuser && \
     chown -R appuser:appuser /app
+
+# Copy remaining files after user creation to avoid permission issues
+COPY --chown=appuser:appuser . .
+
 USER appuser
 
 # Expose ports

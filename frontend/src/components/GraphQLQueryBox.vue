@@ -3,6 +3,9 @@
     <div class="px-6 py-3 flex items-center justify-between border-b border-gray-200 dark:border-gray-700">
       <h3 class="text-md font-semibold text-gray-800 dark:text-gray-100 flex items-center">
         <i class="fas fa-code mr-2 text-primary-600"></i> Generated GraphQL
+        <span v-if="isUpdating" class="ml-2 text-xs text-green-400 animate-pulse">
+          <i class="fas fa-sync-alt fa-spin mr-1"></i>Updating...
+        </span>
       </h3>
       <button
         class="text-sm px-3 py-1 rounded bg-primary-600 hover:bg-primary-700 text-white disabled:opacity-50"
@@ -19,6 +22,7 @@
       @input="updateParent"
       rows="10"
       class="w-full p-4 text-xs font-mono bg-transparent whitespace-pre-wrap break-words custom-scrollbar outline-none resize-y text-gray-800 dark:text-gray-100"
+      :class="{ 'border-l-4 border-green-500': isUpdating }"
     ></textarea>
     <div v-if="formatError" class="text-xs text-red-400 p-2 bg-red-500/10 border-t border-red-400/20">
       <strong>Formatting Error:</strong> {{ formatError }}
@@ -35,6 +39,7 @@ const props = defineProps<{ query: string }>()
 const editableQuery = ref(props.query)
 const isFormatting = ref(false)
 const formatError = ref<string | boolean>(false)
+const isUpdating = ref(false)
 
 /**
  * Attempts to normalize a GraphQL query string to fix common syntax issues.
@@ -76,10 +81,15 @@ const formatQuery = async (query: string) => {
 // When parent provides a new query (from translator), prettify it and update the editor
 watch(
   () => props.query,
-  (newQuery) => {
+  async (newQuery) => {
     // avoid overwriting if the user is currently editing (simple heuristic)
     if (newQuery !== editableQuery.value) {
-      formatQuery(newQuery)
+      isUpdating.value = true
+      await formatQuery(newQuery)
+      // Keep the updating indicator for a moment to show the change
+      setTimeout(() => {
+        isUpdating.value = false
+      }, 1000)
     }
   },
   { immediate: true }

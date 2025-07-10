@@ -184,3 +184,39 @@ class OllamaService:
         except Exception as e:
             logger.error(f"Failed to get model info: {e}")
             return {"error": str(e)} 
+
+    async def stream_chat_completion(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        **kwargs
+    ):
+        """
+        Stream chat completion using unified provider system.
+        
+        Args:
+            messages: List of chat messages
+            model: Model name to use
+            temperature: Temperature for generation
+            max_tokens: Maximum tokens to generate
+            
+        Yields:
+            Streaming chunks from the LLM
+        """
+        try:
+            # Use unified provider system for streaming
+            async for chunk in self.provider_service.stream_chat(
+                messages=messages,
+                model=f"ollama::{model}",  # Prefix with provider
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            ):
+                yield chunk
+                
+        except Exception as e:
+            logger.error(f"Ollama streaming chat completion failed: {e}")
+            # Fallback: yield error message
+            yield {"error": str(e)} 

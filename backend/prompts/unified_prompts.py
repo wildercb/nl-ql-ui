@@ -374,16 +374,23 @@ Return JSON: {"secure": true, "risks": [], "recommendations": []}"""
                 agent_type=AgentType.ANALYZER,
                 strategy=PromptStrategy.DETAILED,
                 description="Comprehensive query and data analysis",
-                required_variables=["data"],
-                variables=["data", "query_context", "analysis_type"],
-                content="""You are a data analysis expert. Analyze the provided data and extract meaningful insights.
+                required_variables=["query_data"],
+                variables=["query_data", "graphql_executed", "original_query", "analysis_type"],
+                content="""You are a data analysis expert. Analyze the provided query results and extract meaningful insights.
 
-## Data to Analyze
-{{ data }}
+## Query Results to Analyze
+{{ query_data }}
 
-{% if query_context %}
-## Query Context
-{{ query_context }}
+{% if graphql_executed %}
+## GraphQL Query Executed
+```graphql
+{{ graphql_executed }}
+```
+{% endif %}
+
+{% if original_query %}
+## Original Query
+{{ original_query }}
 {% endif %}
 
 {% if analysis_type %}
@@ -433,17 +440,18 @@ class UnifiedPromptManager:
     """
     
     def __init__(self):
+        """Initialize the prompt manager."""
         self.templates: Dict[str, PromptTemplate] = {}
         self.agent_templates: Dict[AgentType, Dict[PromptStrategy, List[str]]] = {}
         self.config = get_unified_config()
         
-        # Load all built-in templates
+        # Load built-in templates
         self._load_builtin_templates()
         
-        # Index templates by agent and strategy
+        # Build indexes for fast lookup
         self._build_indexes()
         
-        logger.info(f"Initialized prompt manager with {len(self.templates)} templates")
+        logger.info(f"Prompt manager initialized with {len(self.templates)} templates")
     
     def _load_builtin_templates(self):
         """Load all built-in prompt templates."""
@@ -481,11 +489,6 @@ class UnifiedPromptManager:
         name_pattern: Optional[str] = None
     ) -> Optional[PromptTemplate]:
         """Find the best template for given criteria."""
-        
-        # Get agent config to determine preferred strategy
-        agent_config = self.config.get_agent(agent_type.value)
-        if not strategy and agent_config:
-            strategy = agent_config.prompt_strategy
         
         # Default to detailed strategy
         strategy = strategy or PromptStrategy.DETAILED

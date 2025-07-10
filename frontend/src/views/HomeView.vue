@@ -65,6 +65,8 @@
             title="Agent Stream" 
             :selectedModel="selectedModel"
             :prompts="agentPrompts"
+            :show-prompts="showPrompts"
+            @toggle-prompts="showPrompts = !showPrompts"
             @sendMessage="handleChatMessage"
           />
         </div>
@@ -134,6 +136,7 @@ const dataQueryResults = ref<any[]>([]);
 // Agent prompts and context
 const agentPrompts = ref<any[]>([]);
 const agentContext = ref<string>('');
+const showPrompts = ref(false);
 
 const isValidGraphQL = (q: string) => {
   return /\{[\s\S]*\}/.test(q);
@@ -165,6 +168,16 @@ const runPipeline = async (strategy: string) => {
 
   chatMessages.value.push({ role: 'user', content: naturalQuery.value, timestamp: new Date().toLocaleTimeString() });
 
+  // Placeholder chat message that we will update as events stream in
+  const streamingMsg = {
+    role: 'agent',
+    agent: 'mcp_pipeline',
+    content: '⏳ Starting pipeline...',
+    timestamp: new Date().toLocaleTimeString(),
+    isStreaming: true
+  };
+  chatMessages.value.push(streamingMsg);
+
   try {
     console.log('📡 Streaming request to MCP server...');
 
@@ -176,23 +189,18 @@ const runPipeline = async (strategy: string) => {
       user_id: 'frontend_user'
     };
 
-    // Placeholder chat message that we will update as events stream in
-    const streamingMsg = {
-      role: 'agent',
-      agent: 'mcp_pipeline',
-      content: '⏳ Starting pipeline...',
-      timestamp: new Date().toLocaleTimeString(),
-      isStreaming: true
-    };
-    chatMessages.value.push(streamingMsg);
+    console.log('📤 MCP Request:', mcpRequest);
 
     let finalResult: any = null;
+    let eventCount = 0;
 
-    // Track message index per agent for quick updates
-    const agentMsgIndex: Record<string, number> = {};
+    // No longer tracking message indices since we removed processing messages
 
     for await (const evt of mcpClient.processQueryStream(mcpRequest)) {
-      console.debug('🌊 MCP event:', evt);
+      eventCount++;
+      console.log(`🌊 MCP event #${eventCount}:`, evt);
+      console.log(`📊 Event type: ${evt.event}`);
+      console.log(`📊 Event data:`, JSON.stringify(evt.data, null, 2));
 
       switch (evt.event) {
         case 'start':
@@ -200,104 +208,127 @@ const runPipeline = async (strategy: string) => {
           break;
 
         case 'agent_start': {
-          const agent = evt.data?.data?.agent || 'agent';
-          // Create an empty streaming message for this agent (no progress text)
-          const msg = {
-            role: 'agent',
+          const agent = evt.data?.data?.agent || evt.data?.agent || 'agent';
+          console.log(`🚀 Agent started: ${agent}`);
+          // Don't create any processing message - just wait for the response
+          break;
+        }
+
+        case 'agent_prompt': {
+          const agent = evt.data?.data?.agent || evt.data?.agent || 'agent';
+          const prompt = evt.data?.data?.prompt || evt.data?.prompt || '';
+          console.log(`📝 Agent prompt for ${agent}:`, prompt);
+          
+          // Store the prompt for Show Prompts toggle (only)
+          agentPrompts.value.push({
             agent,
-            content: '',
+            prompt,
+            result: null,
+            timestamp: new Date().toLocaleTimeString()
+          });
+          
+          // Add the prompt to the chat stream as plain text
+          chatMessages.value.push({
+            role: 'agent',
+            agent: agent,
+            content: `PROMPT:\n${prompt}`,
             timestamp: new Date().toLocaleTimeString(),
-            isStreaming: true
-          } as any;
-          chatMessages.value.push(msg);
-          agentMsgIndex[agent] = chatMessages.value.length - 1;
+            isStreaming: false
+          });
+          
           break;
         }
 
         case 'agent_token': {
-          const agent = evt.data?.data?.agent || 'agent';
-          const token = evt.data?.data?.token || '';
-          const idx = agentMsgIndex[agent];
-          if (idx !== undefined) {
-            chatMessages.value[idx].content += token;
-          }
+          const agent = evt.data?.data?.agent || evt.data?.agent || 'agent';
+          const token = evt.data?.data?.token || evt.data?.token || '';
+          console.log(`🎯 Agent token for ${agent}:`, token);
+          
+          // Don't show tokens in the chat stream - just log them
           break;
         }
 
         case 'agent_complete': {
-          const agent = evt.data?.data?.agent || 'agent';
-          const result = evt.data?.data?.result || {};
-          const prompt = evt.data?.data?.prompt;
+          const agent = evt.data?.data?.agent || evt.data?.agent || 'agent';
+          const result = evt.data?.data?.result || evt.data?.result || {};
+          const prompt = evt.data?.data?.prompt || evt.data?.prompt;
+          const rawOutput = evt.data?.data?.raw_output || evt.data?.raw_output;
+          const success = evt.data?.data?.success || evt.data?.success;
+          const error = evt.data?.data?.error || evt.data?.error;
 
-          const idx = agentMsgIndex[agent];
-          if (idx !== undefined) {
-            // Build formatted result content (replace streaming tokens)
-            let formatted = '';
-            if (agent === 'translator' && result.graphql_query) {
-              finalGraphQLQuery.value = sanitizeGraphQL(result.graphql_query);
-              formatted = `✅ **Translation Complete**\n\n**GraphQL Query:**\n\`\`\`graphql\n${result.graphql_query}\`\`\`\n\n**Confidence:** ${result.confidence}\n\n**Explanation:** ${result.explanation}`;
+          console.log(`✅ Agent completed: ${agent}`, evt.data?.data?.result || evt.data?.result);
+          console.log(`📝 Agent prompt:`, evt.data?.data?.prompt || evt.data?.prompt);
+          console.log(`📊 Agent result data:`, JSON.stringify(evt.data?.data?.result || evt.data?.result, null, 2));
+          console.log(`🔍 Raw output:`, evt.data?.data?.raw_output || evt.data?.raw_output);
+          console.log(`✅ Success:`, evt.data?.data?.success || evt.data?.success);
+          console.log(`❌ Error:`, evt.data?.data?.error || evt.data?.error);
+          console.log(`🎯 Full event data:`, JSON.stringify(evt.data, null, 2));
+
+          // Show the response in the chat stream (same as console)
+          let responseContent = '';
+          
+          // Use the exact same data that was logged to console
+          const consoleResult = evt.data?.data?.result || evt.data?.result;
+          const consoleRawOutput = evt.data?.data?.raw_output || evt.data?.raw_output;
+          const consoleSuccess = evt.data?.data?.success || evt.data?.success;
+          const consoleError = evt.data?.data?.error || evt.data?.error;
+          
+          if (consoleError) {
+            responseContent = `${agent.toUpperCase()} ERROR:\n\nError: ${consoleError}\n\nRaw Output: ${consoleRawOutput || 'No raw output'}\n\nResult: ${JSON.stringify(consoleResult, null, 2)}`;
+          } else {
+            // Format the response as plain text
+            if (consoleRawOutput && typeof consoleRawOutput === 'object') {
+              responseContent = `${agent.toUpperCase()} RESPONSE:\n\n${JSON.stringify(consoleRawOutput, null, 2)}`;
+            } else if (consoleRawOutput) {
+              responseContent = `${agent.toUpperCase()} RESPONSE:\n\n${consoleRawOutput}`;
+            } else if (consoleResult) {
+              responseContent = `${agent.toUpperCase()} RESPONSE:\n\n${JSON.stringify(consoleResult, null, 2)}`;
+            } else {
+              responseContent = `${agent.toUpperCase()} RESPONSE:\n\nNo response data available`;
+            }
+          }
+
+          // Add the response to the chat stream immediately after the prompt
+          chatMessages.value.push({
+            role: 'agent',
+            agent: agent,
+            content: responseContent,
+            timestamp: new Date().toLocaleTimeString(),
+            isStreaming: false
+          });
+
+          // Update the agent prompts with the result
+          const existingPromptIndex = agentPrompts.value.findIndex(p => p.agent === agent && p.result === null);
+          if (existingPromptIndex !== -1) {
+            agentPrompts.value[existingPromptIndex].result = evt.data?.data?.result || evt.data?.result || {};
+          }
+
+          // Handle translator's GraphQL query
+          if (agent === 'translator') {
+            const graphql = (evt.data?.data?.result?.graphql_query || evt.data?.result?.graphql_query || evt.data?.data?.result?.graphql || evt.data?.result?.graphql || '');
+            if (graphql) {
+              finalGraphQLQuery.value = sanitizeGraphQL(graphql);
               // Automatically fetch data for the new query
               runDataQuery();
-            } else if (agent === 'reviewer') {
-              formatted = formatReviewResult(result);
-            } else if (agent === 'data_reviewer') {
-              formatted = formatDataReviewResult(result);
-            } else {
-              formatted = formatAgentResult(result);
             }
-
-            chatMessages.value[idx].content = formatted;
-            chatMessages.value[idx].isStreaming = false;
           }
 
-          // Auto-run queries or update results based on reviewer / data reviewer outputs
-          try {
-            if (agent === 'reviewer' && result?.suggested_query) {
-              const suggested = sanitizeGraphQL(result.suggested_query);
-              if (suggested) {
-                finalGraphQLQuery.value = suggested;
-                runDataQuery();
-              }
-            }
-
-            if (agent === 'data_reviewer') {
-              if (result?.query_result && result.query_result.success) {
-                // Use data returned by data reviewer directly
-                dataQueryResults.value = result.query_result.data || [];
-              } else if (result?.suggested_query) {
-                const dq = sanitizeGraphQL(result.suggested_query);
-                if (dq) {
-                  finalGraphQLQuery.value = dq;
-                  runDataQuery();
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Auto data fetch error:', e);
-          }
-
-          // Store prompt for Show Prompts toggle
-          if (prompt) {
-            agentPrompts.value.push({
-              agent,
-              prompt,
-              result,
-              timestamp: new Date().toLocaleTimeString()
-            });
-          }
-
+          // Force Vue reactivity update
+          chatMessages.value = [...chatMessages.value];
           break;
         }
 
         case 'complete':
-          finalResult = evt.data?.data?.result || evt.data?.result || {};
+          finalResult = evt.data?.result || evt.data || {};
           streamingMsg.isStreaming = false;
           streamingMsg.content = '✅ Pipeline completed – processing results...';
+          console.log('🎉 Pipeline completed:', finalResult);
           break;
 
         case 'error':
           streamingMsg.isStreaming = false;
-          streamingMsg.content = `❌ Error: ${evt.data?.data?.error || evt.data?.error || 'unknown'}`;
+          streamingMsg.content = `❌ Error: ${evt.data?.error || 'unknown'}`;
+          console.error('❌ Pipeline error:', evt.data);
           break;
       }
     }
@@ -306,41 +337,48 @@ const runPipeline = async (strategy: string) => {
 
     console.log('✅ MCP final result:', finalResult);
 
-    // Handle translation result
+    // Handle translation result from final summary
     if (finalResult.translation?.graphql_query) {
       finalGraphQLQuery.value = sanitizeGraphQL(finalResult.translation.graphql_query);
 
-      chatMessages.value.push({
-        role: 'agent',
-        agent: 'mcp_translator',
-        content: `✅ **Translation Complete**\n\n**GraphQL Query:**\n\`\`\`graphql\n${finalResult.translation.graphql_query}\`\`\`\n\n**Confidence:** ${finalResult.translation.confidence}\n\n**Explanation:** ${finalResult.translation.explanation}\n\n${finalResult.translation.suggestions?.length ? `**Suggestions:**\n${finalResult.translation.suggestions.map((s: string) => `- ${s}`).join('\n')}` : ''}`,
-        timestamp: new Date().toLocaleTimeString(),
-        isStreaming: false
-      });
+      // Only add translation message if we don't already have one from agent_complete
+      const hasTranslatorMessage = chatMessages.value.some(msg => msg.agent === 'translator');
+      if (!hasTranslatorMessage) {
+        chatMessages.value.push({
+          role: 'agent',
+          agent: 'translator',
+          content: `TRANSLATION COMPLETE\n\nGraphQL Query:\n${finalResult.translation.graphql_query}\n\nConfidence: ${finalResult.translation.confidence || 'N/A'}\n\nExplanation: ${finalResult.translation.explanation || 'No explanation provided'}\n\n${finalResult.translation.suggestions?.length ? `Suggestions:\n${finalResult.translation.suggestions.map((s: string) => `- ${s}`).join('\n')}` : ''}`,
+          timestamp: new Date().toLocaleTimeString(),
+          isStreaming: false
+        });
+      }
       // Fetch data automatically for the final translation
       runDataQuery();
     }
 
-    // Handle review
+    // Handle review from final summary
     if (finalResult.review && Object.keys(finalResult.review).length > 0) {
-      chatMessages.value.push({
-        role: 'agent',
-        agent: 'mcp_reviewer',
-        content: formatReviewResult(finalResult.review),
-        timestamp: new Date().toLocaleTimeString(),
-        isStreaming: false
-      });
+      const hasReviewerMessage = chatMessages.value.some(msg => msg.agent === 'reviewer');
+      if (!hasReviewerMessage) {
+        chatMessages.value.push({
+          role: 'agent',
+          agent: 'mcp_reviewer',
+          content: formatReviewResult(finalResult.review),
+          timestamp: new Date().toLocaleTimeString(),
+          isStreaming: false
+        });
+      }
     }
 
     // Completion summary
     chatMessages.value.push({
       role: 'agent',
       agent: 'system',
-      content: `🎉 Pipeline completed in ${finalResult.processing_time?.toFixed?.(2) || '?.??'}s using ${finalResult.pipeline_strategy} strategy`,
+      content: `Pipeline completed in ${finalResult.processing_time?.toFixed?.(2) || '?.??'}s using ${finalResult.pipeline_strategy || 'unknown'} strategy`,
       timestamp: new Date().toLocaleTimeString()
     });
 
-    // Store prompts if present
+    // Store prompts if present in final result
     if (finalResult.prompts) {
       Object.entries(finalResult.prompts).forEach(([agent, prompt]: [string, any]) => {
         agentPrompts.value.push({
@@ -356,10 +394,16 @@ const runPipeline = async (strategy: string) => {
 
   } catch (error) {
     console.error('💥 MCP Pipeline error:', error);
+    
+    // Update the streaming message with error
+    streamingMsg.isStreaming = false;
+    streamingMsg.content = `❌ Error: ${error.message || 'Unknown error occurred'}`;
+    
+    // Add additional error message
     chatMessages.value.push({
       role: 'agent',
       agent: 'system',
-      content: `❌ Error: ${error.message || 'Unknown error occurred'}`,
+      content: `❌ Pipeline failed: ${error.message || 'Unknown error occurred'}`,
       timestamp: new Date().toLocaleTimeString(),
     });
   } finally {
@@ -476,26 +520,13 @@ const handleChatMessage = async (message: string) => {
       buffer = lines.pop() || '';
       
       for (const line of lines) {
-        console.log('📝 Processing SSE line:', line);
-        
-        if (line.startsWith('event: ')) {
-          const eventType = line.slice(7);
-          console.log('🎯 Event type:', eventType);
-        } else if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          console.log('📊 Event data:', data);
-          
+        if (line.startsWith('data:')) {
+          const data = line.slice(5).trim();
           if (data === '[DONE]') continue;
-          
           try {
             const parsed = JSON.parse(data);
-            console.log('🔍 Parsed data:', parsed);
-            
-            if (parsed.choices && parsed.choices[0] && parsed.choices[0].delta && parsed.choices[0].delta.content) {
-              const content = parsed.choices[0].delta.content;
-              console.log('📝 Adding content:', content);
-              // Update the message in the reactive array
-              chatMessages.value[messageIndex].content += content;
+            if (parsed.token) {
+              chatMessages.value[messageIndex].content += parsed.token;
             }
           } catch (e) {
             console.error('Failed to parse chat response:', e);
@@ -519,25 +550,50 @@ const runDataQuery = async () => {
       console.warn('⚠️ Ignoring invalid GraphQL query:', finalGraphQLQuery.value);
       return;
     }
+    
     isDataLoading.value = true;
     dataQueryResults.value = [];
+    
+    // Add a streaming message for data query
+    const dataQueryMsg = {
+      role: 'agent',
+      agent: 'data_query',
+      content: '🔍 Executing GraphQL query...',
+      timestamp: new Date().toLocaleTimeString(),
+      isStreaming: true
+    };
+    chatMessages.value.push(dataQueryMsg);
+    
     try {
         const response = await fetch('/api/data/query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ graphql_query: finalGraphQLQuery.value }),
         });
+        
         if (!response.ok) {
             const error = await response.json();
             throw new Error(error.detail || 'Failed to fetch data');
         }
+        
         const results = await response.json();
         dataQueryResults.value = results.results || [];
+        
+        // Update the streaming message with results
+        dataQueryMsg.content = `Data Query Complete\n\nResults: ${dataQueryResults.value.length} records found\n\nQuery:\n${finalGraphQLQuery.value}`;
+        dataQueryMsg.isStreaming = false;
+        
     } catch (error) {
         console.error('Data query error:', error);
         dataQueryResults.value = [{ error: String(error) }];
+        
+        // Update the streaming message with error
+        dataQueryMsg.content = `Data Query Failed\n\nError: ${error.message || 'Unknown error'}\n\nQuery:\n${finalGraphQLQuery.value}`;
+        dataQueryMsg.isStreaming = false;
     } finally {
         isDataLoading.value = false;
+        // Force Vue reactivity update
+        chatMessages.value = [...chatMessages.value];
     }
 }
 
